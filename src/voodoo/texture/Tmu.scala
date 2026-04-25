@@ -51,8 +51,9 @@ case class Tmu(c: voodoo.Config) extends Component {
   import Tmu._
 
   val lookupTables = new Area {
-    val recipTableValues = Array.tabulate(257) { i =>
-      U(scala.math.round((1 << 24).toDouble / (256.0 + i)).toLong, 17 bits)
+    val recipTableValues = Array.tabulate(512) { i =>
+      val clamped = if (i <= 256) i else 256
+      U(scala.math.round((1 << 24).toDouble / (256.0 + clamped)).toLong, 17 bits)
     }
     val recipTable = Mem(UInt(17 bits), recipTableValues)
 

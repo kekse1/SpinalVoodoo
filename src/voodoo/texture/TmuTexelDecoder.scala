@@ -13,9 +13,13 @@ case class TmuTexelDecoder(c: voodoo.Config) extends Component {
     val nccTables = in(Tmu.NccTables())
   }
 
-  val paletteRam = Mem(Bits(24 bits), 256)
+  // Quartus trips over the inferred 1W/4R synchronous RAM shape here during DE10 builds.
+  // Replicate the small palette RAM per tap so each copy is a simple 1W/1R memory.
+  val paletteRam = Seq.fill(4)(Mem(Bits(24 bits), 256))
   when(io.paletteWrite.valid) {
-    paletteRam.write(io.paletteWrite.payload.address, io.paletteWrite.payload.data)
+    for (ram <- paletteRam) {
+      ram.write(io.paletteWrite.payload.address, io.paletteWrite.payload.data)
+    }
   }
 
   case class DecodedRgba() extends Bundle {
@@ -138,7 +142,7 @@ case class TmuTexelDecoder(c: voodoo.Config) extends Component {
   }
 
   val paletteColors = Seq.tabulate(4) { idx =>
-    paletteRam.readSync(
+    paletteRam(idx).readSync(
       address = io.sampleFetch.payload.texels(idx)(7 downto 0).asUInt,
       enable = io.sampleFetch.fire
     )
