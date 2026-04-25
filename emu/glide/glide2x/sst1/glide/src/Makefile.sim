@@ -21,6 +21,7 @@ GLIDE_LIBDIR = ../../lib/$(FX_GLIDE_HW)
 SIM_DIR = ../../../../../../emu/sim
 SIM_INTERFACE ?= core
 SIM_MODEL = $(if $(filter de10,$(SIM_INTERFACE)),CoreDe10,CoreSim)
+SIM_TRACE_MODE_FILE = $(SIM_DIR)/obj_dir/.trace_mode
 
 GLIDE_LIB = libglide2x.a
 GLIDE_SHARED = libglide2x.so.2
@@ -132,6 +133,7 @@ BACKEND_OBJ = \
 	$(SIM_DIR)/obj_dir/sim_trace_harness.o \
 	$(SIM_DIR)/obj_dir/voodoo_trace_writer.o
 BACKEND_LIB =
+BACKEND_DEPS = $(BACKEND_OBJ)
 else
 BACKEND_OBJ = \
 	$(SIM_DIR)/obj_dir/sim_harness.o \
@@ -145,6 +147,7 @@ endif
 # Static archive needs --whole-archive to pull in trace objects
 # (trace registration uses virtual dispatch, no direct symbol dependency)
 BACKEND_LIB = -Wl,--whole-archive $(SIM_DIR)/obj_dir/V$(SIM_MODEL)__ALL.a -Wl,--no-whole-archive
+BACKEND_DEPS = $(BACKEND_OBJ) $(SIM_DIR)/obj_dir/V$(SIM_MODEL)__ALL.a $(SIM_TRACE_MODE_FILE)
 endif
 
 ###############################################################################
@@ -153,12 +156,20 @@ endif
 
 all: $(GLIDE_LIBDIR) $(GLIDE_LIBDIR)/$(GLIDE_LIB) $(GLIDE_LIBDIR)/$(GLIDE_SO)
 
+$(GLIDE_OBJECTS): fxinline.h fxgasm.h
+
 ###############################################################################
 #	rules
 ###############################################################################
 
 .c.o:
 	$(CC) -o $@ $(CFLAGS) -c $<
+
+fxinline.h:
+	printf '%s\n' '#ifndef __FX_INLINE_H__' '#define __FX_INLINE_H__' '' '/* The # of 2-byte entries in the hw fog table */' '#define kInternalFogTableEntryCount 0x40' '' '#endif /* __FX_INLINE_H__ */' > $@
+
+fxgasm.h:
+	: > $@
 
 # CPU detection stub for sim mode (no x87/CPUID needed)
 cpuid.o: cpudetect_sim.c
@@ -171,7 +182,7 @@ $(GLIDE_LIBDIR)/$(GLIDE_LIB): $(GLIDE_OBJECTS)
 	$(AR) $(ARFLAGS) $@ $^
 
 # Link as shared library with Verilator model (C++ link for Verilator runtime)
-$(GLIDE_LIBDIR)/$(GLIDE_SO): $(GLIDE_OBJECTS) $(BACKEND_OBJ)
+$(GLIDE_LIBDIR)/$(GLIDE_SO): $(GLIDE_OBJECTS) $(BACKEND_DEPS)
 	$(CXX) -o $(GLIDE_LIBDIR)/$(GLIDE_SHARED) -shared -Wl,-soname,$(GLIDE_SONAME) \
 		$(GLIDE_OBJECTS) $(BACKEND_OBJ) \
 		$(BACKEND_LIB) \
@@ -180,4 +191,5 @@ $(GLIDE_LIBDIR)/$(GLIDE_SO): $(GLIDE_OBJECTS) $(BACKEND_OBJ)
 
 clean:
 	rm -f $(GLIDE_OBJECTS)
+	rm -f fxinline.h fxgasm.h
 	rm -f $(GLIDE_LIBDIR)/$(GLIDE_LIB) $(GLIDE_LIBDIR)/$(GLIDE_SHARED) $(GLIDE_LIBDIR)/$(GLIDE_SO)

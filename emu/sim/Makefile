@@ -68,9 +68,12 @@ VERILATE_STAMP = $(OBJ_DIR)/.$(SIM_TOP).verilate.stamp
 # Updated at parse time via $(shell) so the timestamp only changes on real transitions.
 TRACE_MODE_FILE = $(OBJ_DIR)/.trace_mode
 TRACE_MODE_VAL  = $(if $(filter 1,$(TRACE)),trace,notrace)
+SIM_INTERFACE_FILE = $(OBJ_DIR)/.sim_interface
+SIM_INTERFACE_VAL = $(SIM_INTERFACE)
 CORE_SIM_GEN_ARGS_FILE = $(OBJ_DIR)/.core_sim_gen_args
 $(shell mkdir -p $(OBJ_DIR))
 $(shell [ -f $(TRACE_MODE_FILE) ] && [ "$$(cat $(TRACE_MODE_FILE))" = "$(TRACE_MODE_VAL)" ] || echo "$(TRACE_MODE_VAL)" > $(TRACE_MODE_FILE))
+$(shell [ -f $(SIM_INTERFACE_FILE) ] && [ "$$(cat $(SIM_INTERFACE_FILE))" = "$(SIM_INTERFACE_VAL)" ] || printf '%s\n' "$(SIM_INTERFACE_VAL)" > $(SIM_INTERFACE_FILE))
 $(shell [ -f $(CORE_SIM_GEN_ARGS_FILE) ] && [ "$$(cat $(CORE_SIM_GEN_ARGS_FILE))" = "$(CORE_SIM_GEN_ARGS)" ] || printf '%s\n' "$(CORE_SIM_GEN_ARGS)" > $(CORE_SIM_GEN_ARGS_FILE))
 
 ###############################################################################
@@ -118,7 +121,7 @@ harness: $(HARNESS_OBJS)
 # verilated.o / verilated_fst_c.o only need obj_dir to exist.
 # Using order-only deps on the stamp so these compile in parallel with the model.
 # TRACE_MODE_FILE forces recompilation when TRACE= changes (CXXFLAGS differ).
-$(OBJ_DIR)/sim_harness.o: $(HARNESS_SRC) $(HARNESS_DIR)/sim_harness.h $(TRACE_MODE_FILE) | $(VERILATE_STAMP)
+$(OBJ_DIR)/sim_harness.o: $(HARNESS_SRC) $(HARNESS_DIR)/sim_harness.h $(TRACE_MODE_FILE) $(SIM_INTERFACE_FILE) | $(VERILATE_STAMP)
 	$(OBJCACHE) $(CXX32) $(CXXFLAGS) -DVL_USER_WARN -c -o $@ $<
 
 $(OBJ_DIR)/verilated.o: $(VERILATOR_ROOT)/include/verilated.cpp $(TRACE_MODE_FILE) | $(VERILATE_STAMP)

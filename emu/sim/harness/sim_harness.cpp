@@ -1057,27 +1057,27 @@ uint32_t sim_get_fb_read_max_queue_occupancy(void) { return 0; }
 
 uint32_t sim_get_tex_fill_hits(void) {
     if (!top) return 0;
-    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__textureCache__DOT__texFillHits;
+    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__texturePath__DOT__texFillHits;
 }
 uint32_t sim_get_tex_fill_misses(void) {
     if (!top) return 0;
-    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__textureCache__DOT__texFillMisses;
+    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__texturePath__DOT__texFillMisses;
 }
 uint32_t sim_get_tex_fill_burst_count(void) {
     if (!top) return 0;
-    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__textureCache__DOT__texFillBurstCount;
+    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__texturePath__DOT__texFillBurstCount;
 }
 uint32_t sim_get_tex_fill_burst_beats(void) {
     if (!top) return 0;
-    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__textureCache__DOT__texFillBurstBeats;
+    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__texturePath__DOT__texFillBurstBeats;
 }
 uint32_t sim_get_tex_fill_stall_cycles(void) {
     if (!top) return 0;
-    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__textureCache__DOT__texFillStallCycles;
+    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__texturePath__DOT__texFillStallCycles;
 }
 uint32_t sim_get_tex_fast_bilinear_hits(void) {
     if (!top) return 0;
-    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__textureCache__DOT__texFastBilinearHits;
+    return (uint32_t)top->rootp->CoreSim__DOT__core_1__DOT__pixelPipeline_1__DOT__tmu_1__DOT__texturePath__DOT__texFastBilinearHits;
 }
 uint32_t sim_get_tex_compare_miss_samples(void) { return 0; }
 uint32_t sim_get_tex_lookup_blocked_cycles(void) { return 0; }
