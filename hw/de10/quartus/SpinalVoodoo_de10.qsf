@@ -4,13 +4,18 @@ set_global_assignment -name TOP_LEVEL_ENTITY De10PlatformTop
 
 set_global_assignment -name VERILOG_FILE ../rtl/De10Top.v
 set_global_assignment -name VERILOG_FILE De10PlatformTop.v
+# Compile the Qsys top wrappers into the default project library so plain
+# Verilog instantiations in De10PlatformTop bind to the real module views.
 set_global_assignment -name QIP_FILE ../qsys/generated/pll/synthesis/de10_core_pll.qip
 set_global_assignment -name QIP_FILE ../qsys/generated/synthesis/de10_soc.qip
+set_global_assignment -name VERILOG_FILE ../qsys/generated/pll/synthesis/de10_core_pll.v
+set_global_assignment -name VERILOG_FILE ../qsys/generated/synthesis/de10_soc.v
 set_global_assignment -name SDC_FILE SpinalVoodoo_de10.sdc
 
 set_global_assignment -name RESERVE_ALL_UNUSED_PINS "AS INPUT TRI-STATED"
 set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
 set_global_assignment -name AUTO_DSP_RECOGNITION ON
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MINIMUM
 
 # Board clock/reset pin wiring.
 # NOTE: These are DE10-Nano oriented defaults and can be overridden if your
