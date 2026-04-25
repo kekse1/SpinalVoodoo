@@ -107,15 +107,23 @@ case class SpanWalker(c: Config, formalStrong: Boolean = false) extends Componen
   val clipRightPix = triangleConst.clipRight.resize(c.vertexFormat.nonFraction bits).asSInt
   val clipLowYPix = triangleConst.clipLowY.resize(c.vertexFormat.nonFraction bits).asSInt
   val clipHighYPix = triangleConst.clipHighY.resize(c.vertexFormat.nonFraction bits).asSInt
-  val visibleStartPix = Mux(clipLeftPix > triangleXStartPix, clipLeftPix, triangleXStartPix)
-  val visibleEndPix = Mux(clipRightPix < triangleXEndPix, clipRightPix, triangleXEndPix)
+  val effectiveClipLeftPix = Mux(triangleConst.enableClipping, clipLeftPix, triangleXStartPix)
+  val effectiveClipRightPix = Mux(triangleConst.enableClipping, clipRightPix, triangleXEndPix)
+  val effectiveClipLowYPix =
+    Mux(triangleConst.enableClipping, clipLowYPix, triangleConst.yrange(0).floor(0).asSInt)
+  val effectiveClipHighYPix =
+    Mux(triangleConst.enableClipping, clipHighYPix, triangleConst.yrange(1).floor(0).asSInt)
+  val visibleStartPix =
+    Mux(effectiveClipLeftPix > triangleXStartPix, effectiveClipLeftPix, triangleXStartPix)
+  val visibleEndPix =
+    Mux(effectiveClipRightPix < triangleXEndPix, effectiveClipRightPix, triangleXEndPix)
   val emitStartPix = leftEdge.coords(0).floor(0).asSInt
   val emitEndPix = emitRight.floor(0).asSInt
   val emitVisibleX =
-    emitStartPix <= emitEndPix && emitEndPix >= clipLeftPix && emitStartPix < clipRightPix
+    emitStartPix <= emitEndPix && emitEndPix >= effectiveClipLeftPix && emitStartPix < effectiveClipRightPix
   val emitVisibleY = {
     val emitYPix = leftEdge.coords(1).floor(0).asSInt
-    emitYPix >= clipLowYPix && emitYPix < clipHighYPix
+    emitYPix >= effectiveClipLowYPix && emitYPix < effectiveClipHighYPix
   }
   val emitVisible = emitVisibleX && emitVisibleY
 
@@ -352,10 +360,10 @@ case class SpanWalker(c: Config, formalStrong: Boolean = false) extends Componen
 
     when(o.fire) {
       assert(outputStartPix <= outputEndPix)
-      assert(outputStartPix >= clipLeftPix)
-      assert(outputEndPix < clipRightPix)
-      assert(outputYPix >= clipLowYPix)
-      assert(outputYPix < clipHighYPix)
+      assert(outputStartPix >= effectiveClipLeftPix)
+      assert(outputEndPix < effectiveClipRightPix)
+      assert(outputYPix >= effectiveClipLowYPix)
+      assert(outputYPix < effectiveClipHighYPix)
     }
   }
 
