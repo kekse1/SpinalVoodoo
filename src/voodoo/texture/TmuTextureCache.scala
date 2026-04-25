@@ -368,8 +368,8 @@ case class TmuTextureCache(
   val dbgCompareValid = compareValid.setName("dbgCompareValid")
   markSimulationOnly(dbgCompareValid)
 
-  val fillFetchRsp = Stream(Tmu.SampleFetch(c))
-  val fillFetchPendingValid = RegInit(False)
+  val fillFetchRaw = Stream(Tmu.SampleFetch(c))
+  val fillFetchRsp = fillFetchRaw.queue(1)
   val continuePendingValid = RegInit(False)
   val continuePendingIdx = Reg(UInt(2 bits)) init 0
   val hitRsp = Tmu.SampleFetch(c)
@@ -910,16 +910,9 @@ case class TmuTextureCache(
     }
   }
 
-  fillRsp.ready := True
-  fillFetchRsp.valid := fillFetchPendingValid
-  fillFetchRsp.payload := ownerRspCommitted
-
-  when(fillRsp.fire && fillFetchEmit) {
-    fillFetchPendingValid := True
-  }
-  when(fillFetchPendingValid && io.sampleFetch.ready) {
-    fillFetchPendingValid := False
-  }
+  fillRsp.ready := !fillFetchEmit || fillFetchRaw.ready
+  fillFetchRaw.valid := fillRsp.valid && fillFetchEmit
+  fillFetchRaw.payload := ownerRspCommitted
 
   when(fillRsp.fire) {
     val nextWordAddr =
