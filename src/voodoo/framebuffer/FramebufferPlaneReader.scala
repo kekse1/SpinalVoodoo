@@ -43,6 +43,11 @@ case class FramebufferPlaneReader(c: Config) extends Component {
     val singleBeatBurstCount = out UInt (32 bits)
     val multiBeatBurstCount = out UInt (32 bits)
     val maxOccupancy = out UInt (8 bits)
+    val cacheDebug = out Bits (64 bits)
+    val cacheDebugReadAddr = out UInt (addrWidth bits)
+    val cacheDebugExpectedAddr = out UInt (addrWidth bits)
+    val cacheDebugRemaining = out UInt (spanLaneCountWidth bits)
+    val cacheDebugOccupancy = out Bits (32 bits)
   }
 
   io.prefetchReq.valid.simPublic()
@@ -65,6 +70,7 @@ case class FramebufferPlaneReader(c: Config) extends Component {
   val spanIssueQueue = StreamFifo(HardType(SpanCmd()), issueQueueDepth)
   val issuedSpanQueue = StreamFifo(HardType(SpanCmd()), 4)
   val laneFifo = StreamFifo(Bits(16 bits), lineBufferLanes)
+  val directMissLaneQueue = StreamFifo(Bool(), 8)
   val readRspFifo = StreamFifo(ReadRsp(), 16)
 
   val fillHits = Reg(UInt(32 bits)) init (0)
@@ -148,12 +154,52 @@ case class FramebufferPlaneReader(c: Config) extends Component {
   }
 
   val incomingSpan = makeSpan(io.prefetchReq.payload)
-  spanIssueQueue.io.push.valid := io.prefetchReq.valid
-  spanIssueQueue.io.push.payload := incomingSpan
-  io.prefetchReq.ready := spanIssueQueue.io.push.ready
   when(io.prefetchReq.fire) {
     fillMisses := fillMisses + 1
   }
+
+  // The cached reader is fed by a span prefetch stream, while the later pixel
+  // stream can legally skip pixels before framebuffer access (for example due
+  // to pipeline-side kills).  Track the next prefetched lane expected by the
+  // consumer and allow forward skips by discarding unused cached lanes.  A
+  // backward/non-monotonic request remains an invariant violation.
+  val consumeQueue = StreamFifo(HardType(SpanCmd()), issueQueueDepth)
+  val consumeActive = RegInit(False)
+  val consumeExpectedAddr = Reg(UInt(addrWidth bits)) init (0)
+  val consumeRemainingLanes = Reg(UInt(spanLaneCountWidth bits)) init (0)
+  val consumeBoot = !consumeActive && consumeQueue.io.pop.valid
+  val consumeCurrentAddr = UInt(addrWidth bits)
+  val consumeCurrentRemaining = UInt(spanLaneCountWidth bits)
+  consumeCurrentAddr := consumeExpectedAddr
+  consumeCurrentRemaining := consumeRemainingLanes
+  when(!consumeActive) {
+    consumeCurrentAddr := consumeQueue.io.pop.payload.startAddress
+    consumeCurrentRemaining := consumeQueue.io.pop.payload.laneCount
+  }
+  val consumeExpectedValid = consumeActive || consumeBoot
+  val consumeAddrMatches = io.readReq.address === consumeCurrentAddr
+  val consumeAddrAhead = io.readReq.address > consumeCurrentAddr
+  val consumeInvariantOk = !io.readReq.valid || (consumeExpectedValid && consumeAddrMatches)
+
+  spanIssueQueue.io.push.valid := io.prefetchReq.valid && consumeQueue.io.push.ready
+  spanIssueQueue.io.push.payload := incomingSpan
+  consumeQueue.io.push.valid := io.prefetchReq.valid && spanIssueQueue.io.push.ready
+  consumeQueue.io.push.payload := incomingSpan
+  io.prefetchReq.ready := spanIssueQueue.io.push.ready && consumeQueue.io.push.ready
+
+  def advanceConsume(onFirstLane: Bool): Unit = {
+    when(consumeCurrentRemaining === 1) {
+      consumeActive := False
+      consumeExpectedAddr := 0
+      consumeRemainingLanes := 0
+    }.otherwise {
+      consumeActive := True
+      consumeExpectedAddr := (consumeCurrentAddr + U(2, addrWidth bits)).resized
+      consumeRemainingLanes := consumeCurrentRemaining - 1
+    }
+    consumeQueue.io.pop.ready := onFirstLane
+  }
+  consumeQueue.io.pop.ready := False
 
   val activeFillValid = issuedSpanQueue.io.pop.valid
   val activeFillSpan = issuedSpanQueue.io.pop.payload
@@ -166,20 +212,35 @@ case class FramebufferPlaneReader(c: Config) extends Component {
   val pendingLaneData = Reg(Bits(16 bits)) init (0)
   pendingLaneValid.simPublic()
 
-  internalMem.cmd.valid := spanIssueQueue.io.pop.valid && issuedSpanQueue.io.push.ready
-  internalMem.cmd.fragment.address := spanIssueQueue.io.pop.payload.firstWordAddress
+  // If the consumer is behind the prefetch stream (or no prefetched span is
+  // available), fall back to an ordered direct read.
+  val directMissNeeded = !consumeExpectedValid ||
+    (consumeExpectedValid && !consumeAddrMatches && !consumeAddrAhead)
+  val directMissCmdValid = io.readReq.valid && directMissNeeded && directMissLaneQueue.io.push.ready
+  val prefetchCmdValid = spanIssueQueue.io.pop.valid && issuedSpanQueue.io.push.ready
+  val directMissCmdSelected = directMissCmdValid
+  val prefetchCmdSelected = prefetchCmdValid && !directMissCmdSelected
+
+  internalMem.cmd.valid := directMissCmdSelected || prefetchCmdSelected
+  internalMem.cmd.fragment.address := directMissCmdSelected ? alignedWordAddress(
+    io.readReq.address
+  ) | spanIssueQueue.io.pop.payload.firstWordAddress
   internalMem.cmd.fragment.opcode := Bmb.Cmd.Opcode.READ
-  internalMem.cmd.fragment.length :=
-    (spanIssueQueue.io.pop.payload.lastWordAddress - spanIssueQueue.io.pop.payload.firstWordAddress + 3).resized
-  internalMem.cmd.fragment.source := 0
+  internalMem.cmd.fragment.length := directMissCmdSelected ? U(
+    3,
+    internalMem.cmd.fragment.length.getWidth bits
+  ) | (spanIssueQueue.io.pop.payload.lastWordAddress - spanIssueQueue.io.pop.payload.firstWordAddress + 3).resized
+  internalMem.cmd.fragment.source := directMissCmdSelected.asUInt.resized
   internalMem.cmd.fragment.data := 0
   internalMem.cmd.fragment.mask := 0
   internalMem.cmd.last := True
-  spanIssueQueue.io.pop.ready := internalMem.cmd.ready && issuedSpanQueue.io.push.ready
-  issuedSpanQueue.io.push.valid := internalMem.cmd.fire
+  spanIssueQueue.io.pop.ready := internalMem.cmd.ready && issuedSpanQueue.io.push.ready && !directMissCmdSelected
+  issuedSpanQueue.io.push.valid := internalMem.cmd.fire && prefetchCmdSelected
   issuedSpanQueue.io.push.payload := spanIssueQueue.io.pop.payload
+  directMissLaneQueue.io.push.valid := internalMem.cmd.fire && directMissCmdSelected
+  directMissLaneQueue.io.push.payload := io.readReq.address(1)
   issuedSpanQueue.io.pop.ready := False
-  when(internalMem.cmd.fire) {
+  when(internalMem.cmd.fire && prefetchCmdSelected) {
     fillBurstCount := fillBurstCount + 1
     fillBurstBeats := fillBurstBeats + spanIssueQueue.io.pop.payload.wordCount.resize(32 bits)
     when(spanIssueQueue.io.pop.payload.wordCount === 1) {
@@ -197,10 +258,12 @@ case class FramebufferPlaneReader(c: Config) extends Component {
     currentFillWordAddress =/= activeFillSpan.lastWordAddress || activeFillSpan.endAddress(1)
   val readDataLo = internalMem.rsp.fragment.data(15 downto 0)
   val readDataHi = internalMem.rsp.fragment.data(31 downto 16)
+  val prefetchMemRspValid = internalMem.rsp.valid && internalMem.rsp.source === 0
+  val directMissMemRspValid = internalMem.rsp.valid && internalMem.rsp.source === 1
   val canAcceptMemRsp = activeFillValid && !pendingLaneValid && laneFifo.io.push.ready
 
-  internalMem.rsp.ready := canAcceptMemRsp && internalMem.rsp.source === 0
-  laneFifo.io.push.valid := pendingLaneValid || (internalMem.rsp.valid && activeFillValid && emitLo)
+  internalMem.rsp.ready := (canAcceptMemRsp && internalMem.rsp.source === 0) || (directMissMemRspValid && directMissLaneQueue.io.pop.valid && readRspFifo.io.push.ready)
+  laneFifo.io.push.valid := pendingLaneValid || (prefetchMemRspValid && activeFillValid && emitLo)
   laneFifo.io.push.payload := pendingLaneValid ? pendingLaneData | readDataLo
 
   when(pendingLaneValid && laneFifo.io.push.ready) {
@@ -226,11 +289,27 @@ case class FramebufferPlaneReader(c: Config) extends Component {
     }
   }
 
-  val readCanServe = laneFifo.io.pop.valid
-  io.readReq.ready := readRspFifo.io.push.ready && readCanServe
-  readRspFifo.io.push.valid := io.readReq.fire
-  readRspFifo.io.push.payload.data := laneFifo.io.pop.payload
-  laneFifo.io.pop.ready := io.readReq.fire && readRspFifo.io.push.ready
+  // Direct misses return later through the same ordered read response stream.
+  // Do not let a later cached hit push an immediate response ahead of an
+  // older outstanding direct miss response.
+  val directMissOutstanding = directMissLaneQueue.io.occupancy =/= 0
+  val readCanServe =
+    laneFifo.io.pop.valid && consumeExpectedValid && consumeAddrMatches && !directMissOutstanding
+  val skipCachedLane =
+    io.readReq.valid && consumeExpectedValid && !consumeAddrMatches && consumeAddrAhead && laneFifo.io.pop.valid
+  val directMissReadReady = directMissCmdSelected && internalMem.cmd.ready
+  val cachedReadFire = io.readReq.valid && readRspFifo.io.push.ready && readCanServe
+  val directMissRspFire =
+    directMissMemRspValid && directMissLaneQueue.io.pop.valid && readRspFifo.io.push.ready
+  io.readReq.ready := (readRspFifo.io.push.ready && readCanServe) || directMissReadReady
+  readRspFifo.io.push.valid := cachedReadFire || directMissRspFire
+  readRspFifo.io.push.payload.data := directMissRspFire ? (directMissLaneQueue.io.pop.payload ? readDataHi | readDataLo) | laneFifo.io.pop.payload
+  laneFifo.io.pop.ready := cachedReadFire || skipCachedLane
+  directMissLaneQueue.io.pop.ready := directMissRspFire
+
+  when(cachedReadFire || skipCachedLane) {
+    advanceConsume(!consumeActive)
+  }
 
   when(io.readReq.valid && !io.readReq.ready) {
     fillStallCycles := fillStallCycles + 1
@@ -242,41 +321,80 @@ case class FramebufferPlaneReader(c: Config) extends Component {
   }
 
   GenerationFlags.formal {
-    val formalConsumeQueue = StreamFifo(HardType(SpanCmd()), issueQueueDepth)
-    formalConsumeQueue.io.push.valid := io.prefetchReq.valid
-    formalConsumeQueue.io.push.payload := incomingSpan
-    when(io.prefetchReq.fire) {
-      assert(formalConsumeQueue.io.push.ready)
+    when(cachedReadFire) {
+      assert(consumeExpectedValid)
+      assert(consumeAddrMatches)
+      assert(!directMissOutstanding)
     }
-
-    val consumeActive = RegInit(False)
-    val consumeExpectedAddr = Reg(UInt(addrWidth bits)) init (0)
-    val consumeRemainingLanes = Reg(UInt(spanLaneCountWidth bits)) init (0)
-    val consumeBoot = !consumeActive && formalConsumeQueue.io.pop.valid
-    val consumeCurrentAddr = UInt(addrWidth bits)
-    val consumeCurrentRemaining = UInt(spanLaneCountWidth bits)
-    consumeCurrentAddr := consumeExpectedAddr
-    consumeCurrentRemaining := consumeRemainingLanes
-    when(!consumeActive) {
-      consumeCurrentAddr := formalConsumeQueue.io.pop.payload.startAddress
-      consumeCurrentRemaining := formalConsumeQueue.io.pop.payload.laneCount
+    when(skipCachedLane) {
+      assert(consumeExpectedValid)
+      assert(!consumeAddrMatches)
+      assert(consumeAddrAhead)
+      assert(laneFifo.io.pop.valid)
     }
-
-    formalConsumeQueue.io.pop.ready := io.readReq.fire && !consumeActive
-
-    when(io.readReq.fire) {
-      assert(consumeActive || consumeBoot)
-      assert(io.readReq.address === consumeCurrentAddr)
-      when(consumeCurrentRemaining === 1) {
-        consumeActive := False
-        consumeExpectedAddr := 0
-        consumeRemainingLanes := 0
-      }.otherwise {
-        consumeActive := True
-        consumeExpectedAddr := (consumeCurrentAddr + U(2, addrWidth bits)).resized
-        consumeRemainingLanes := consumeCurrentRemaining - 1
-      }
+    when(directMissReadReady) {
+      assert(directMissNeeded)
+      assert(directMissLaneQueue.io.push.ready)
+      assert(!laneFifo.io.pop.ready)
     }
+    when(directMissRspFire) {
+      assert(directMissLaneQueue.io.pop.valid)
+    }
+  }
+
+  {
+    val cacheDebug = Bits(64 bits)
+    val cacheDebugOccupancy = Bits(32 bits)
+    cacheDebug := 0
+    cacheDebug(0) := io.readReq.valid
+    cacheDebug(1) := io.readReq.ready
+    cacheDebug(2) := consumeExpectedValid
+    cacheDebug(3) := consumeAddrMatches
+    cacheDebug(4) := consumeInvariantOk
+    cacheDebug(5) := laneFifo.io.pop.valid
+    cacheDebug(6) := readRspFifo.io.push.ready
+    cacheDebug(7) := io.prefetchReq.fire
+    cacheDebug(8) := internalMem.cmd.fire
+    cacheDebug(9) := internalMem.rsp.fire
+    cacheDebug(10) := consumeActive
+    cacheDebug(11) := consumeBoot
+    cacheDebug(12) := spanIssueQueue.io.pop.valid
+    cacheDebug(13) := issuedSpanQueue.io.pop.valid
+    cacheDebug(14) := pendingLaneValid
+    cacheDebug(15) := skipCachedLane
+    cacheDebug(16) := directMissCmdValid
+    cacheDebug(17) := directMissCmdSelected
+    cacheDebug(18) := directMissReadReady
+    cacheDebug(19) := directMissOutstanding
+    cacheDebug(20) := directMissLaneQueue.io.pop.valid
+    cacheDebug(21) := directMissMemRspValid
+    cacheDebug(22) := laneFifo.io.pop.ready
+    io.cacheDebug := cacheDebug
+    io.cacheDebugReadAddr := io.readReq.address
+    io.cacheDebugExpectedAddr := consumeCurrentAddr
+    io.cacheDebugRemaining := consumeCurrentRemaining
+    cacheDebugOccupancy := 0
+    cacheDebugOccupancy(6 downto 0) := consumeQueue.io.occupancy.asBits.resized
+    cacheDebugOccupancy(15 downto 8) := laneFifo.io.occupancy.asBits.resized
+    cacheDebugOccupancy(18 downto 16) := issuedSpanQueue.io.occupancy.asBits.resized
+    cacheDebugOccupancy(23 downto 19) := readRspFifo.io.occupancy.asBits.resized
+    cacheDebugOccupancy(27 downto 24) := directMissLaneQueue.io.occupancy.asBits.resized
+    io.cacheDebugOccupancy := cacheDebugOccupancy
+
+    consumeActive.simPublic()
+    consumeBoot.simPublic()
+    consumeExpectedAddr.simPublic()
+    consumeRemainingLanes.simPublic()
+    consumeCurrentAddr.simPublic()
+    consumeCurrentRemaining.simPublic()
+    consumeExpectedValid.simPublic()
+    consumeAddrMatches.simPublic()
+    consumeInvariantOk.simPublic()
+    skipCachedLane.simPublic()
+    consumeQueue.io.occupancy.simPublic()
+    laneFifo.io.occupancy.simPublic()
+    issuedSpanQueue.io.occupancy.simPublic()
+    readRspFifo.io.occupancy.simPublic()
   }
 
   when(laneFifo.io.occupancy.resize(8 bits) > maxOccupancy) {
