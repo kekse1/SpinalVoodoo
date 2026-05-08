@@ -388,6 +388,16 @@ case class CoreDebug() extends Bundle {
   val pipelineBusy = Bool()
   val busy = CoreBusyMap()
   val writePath = CoreWritePathMap()
+  val pipelineBusySources = Bits(32 bits)
+  val fbAccess = Bits(32 bits)
+  val fbColorCache = Bits(32 bits)
+  val fbColorCacheReq = Bits(32 bits)
+  val fbColorCacheExpected = Bits(32 bits)
+  val fbColorCacheOccupancy = Bits(32 bits)
+  val fbAuxCache = Bits(32 bits)
+  val fbAuxCacheReq = Bits(32 bits)
+  val fbAuxCacheExpected = Bits(32 bits)
+  val fbAuxCacheOccupancy = Bits(32 bits)
 
   def exposeToSim(): Unit = {
     pipelineBusy.simPublic()
