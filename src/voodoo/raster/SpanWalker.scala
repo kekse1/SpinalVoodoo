@@ -195,27 +195,17 @@ case class SpanWalker(c: Config, formalStrong: Boolean = false) extends Componen
     )
   }
 
+  val nextRowRequest = Bool()
+  val nextRowLeftBiased = Bool()
+  val nextRowBase = SpanWalker.Cursor(c)
+  nextRowRequest := False
+  nextRowLeftBiased := False
+  nextRowBase := rowGuess
+
   def prepareNextRow(base: SpanWalker.Cursor, leftBiasedGuess: Boolean): Unit = {
-    val nextY = (base.coords(1) + one).fixTo(c.vertexFormat)
-    when(nextY >= triangleConst.yrange(1)) {
-      state := WalkerState.Idle
-      firstSpanPending := False
-      recoverFoundInside := False
-    }.otherwise {
-      if (leftBiasedGuess) {
-        stepDownLeft(rowGuess, base)
-        stepDownLeft(probe, base)
-        stepDownLeft(bookmark, base)
-        recoverFoundInside := False
-        state := WalkerState.RecoverLeft
-      } else {
-        stepVertical(rowGuess, base)
-        stepVertical(probe, base)
-        stepVertical(bookmark, base)
-        recoverFoundInside := False
-        state := WalkerState.Decide
-      }
-    }
+    nextRowRequest := True
+    nextRowBase := base
+    nextRowLeftBiased := (if (leftBiasedGuess) True else False)
   }
 
   def captureVisibleLeftEdgeFromProbe(): Unit = {
@@ -351,6 +341,33 @@ case class SpanWalker(c: Config, formalStrong: Boolean = false) extends Componen
   when(state === WalkerState.EmitSpan && !emitVisible) {
     firstSpanPending := False
     prepareNextRow(leftEdge, leftBiasedGuess = true)
+  }
+
+  when(nextRowRequest) {
+    val nextY = (nextRowBase.coords(1) + one).fixTo(c.vertexFormat)
+    when(nextY >= triangleConst.yrange(1)) {
+      state := WalkerState.Idle
+      firstSpanPending := False
+      recoverFoundInside := False
+    }.otherwise {
+      val vertical = SpanWalker.Cursor(c)
+      val downLeft = SpanWalker.Cursor(c)
+      val next = SpanWalker.Cursor(c)
+      stepVertical(vertical, nextRowBase)
+      stepHorizontal(downLeft, vertical, moveRight = false)
+      next := vertical
+      when(nextRowLeftBiased) {
+        next := downLeft
+      }
+      rowGuess := next
+      probe := next
+      bookmark := next
+      recoverFoundInside := False
+      state := WalkerState.Decide
+      when(nextRowLeftBiased) {
+        state := WalkerState.RecoverLeft
+      }
+    }
   }
 
   GenerationFlags.formal {

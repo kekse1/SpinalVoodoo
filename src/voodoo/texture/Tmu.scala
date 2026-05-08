@@ -444,7 +444,6 @@ case class Tmu(c: voodoo.Config) extends Component {
     val pointTexelY =
       wrapOrClamp(stageB.payload.finalTPoint, stageB.payload.texHeightBits, stageBTexMode.clampT)
     val pointAddr = texelAddr(pointTexelX, pointTexelY)
-    val pointBankSel = (pointTexelY(0) ## pointTexelX(0)).asUInt
 
     val biX0 =
       wrapOrClamp(stageB.payload.finalSi, stageB.payload.texWidthBits, stageBTexMode.clampS)
@@ -464,23 +463,14 @@ case class Tmu(c: voodoo.Config) extends Component {
     val biAddr1 = texelAddr(biX1, biY0)
     val biAddr2 = texelAddr(biX0, biY1)
     val biAddr3 = texelAddr(biX1, biY1)
-    val biBankSel0 = (biY0(0) ## biX0(0)).asUInt
-    val biBankSel1 = (biY0(0) ## biX1(0)).asUInt
-    val biBankSel2 = (biY1(0) ## biX0(0)).asUInt
-    val biBankSel3 = (biY1(0) ## biX1(0)).asUInt
   }
   val packedLodBase = addressGen.packedLodBase
   val packedLodShift = addressGen.packedLodShift
   val pointAddr = addressGen.pointAddr
-  val pointBankSel = addressGen.pointBankSel
   val biAddr0 = addressGen.biAddr0
   val biAddr1 = addressGen.biAddr1
   val biAddr2 = addressGen.biAddr2
   val biAddr3 = addressGen.biAddr3
-  val biBankSel0 = addressGen.biBankSel0
-  val biBankSel1 = addressGen.biBankSel1
-  val biBankSel2 = addressGen.biBankSel2
-  val biBankSel3 = addressGen.biBankSel3
 
   val inputPassthrough = Tmu.TmuPassthrough(c)
   assignPassthrough(
@@ -509,11 +499,6 @@ case class Tmu(c: voodoo.Config) extends Component {
       req.biAddr1 := biAddr1
       req.biAddr2 := biAddr2
       req.biAddr3 := biAddr3
-      req.pointBankSel := pointBankSel
-      req.biBankSel0 := biBankSel0
-      req.biBankSel1 := biBankSel1
-      req.biBankSel2 := biBankSel2
-      req.biBankSel3 := biBankSel3
       req.lodBase := packedLodBase
       req.lodShift := packedLodShift
       req.is16Bit := is16BitFormat
@@ -538,16 +523,18 @@ case class Tmu(c: voodoo.Config) extends Component {
         sampleRequestPrep.payload.is16Bit
       )
       val startupTexShift = (0 until 9).map(sampleRequestPrep.payload.texTables.texShift(_))
+      val tapAddr = Vec(UInt(c.addressWidth.value bits), 4)
+      tapAddr(
+        0
+      ) := sampleRequestPrep.payload.bilinear ? sampleRequestPrep.payload.biAddr0 | sampleRequestPrep.payload.pointAddr
+      tapAddr(1) := sampleRequestPrep.payload.biAddr1
+      tapAddr(2) := sampleRequestPrep.payload.biAddr2
+      tapAddr(3) := sampleRequestPrep.payload.biAddr3
       req.pointAddr := sampleRequestPrep.payload.pointAddr
       req.biAddr0 := sampleRequestPrep.payload.biAddr0
       req.biAddr1 := sampleRequestPrep.payload.biAddr1
       req.biAddr2 := sampleRequestPrep.payload.biAddr2
       req.biAddr3 := sampleRequestPrep.payload.biAddr3
-      req.pointBankSel := sampleRequestPrep.payload.pointBankSel
-      req.biBankSel0 := sampleRequestPrep.payload.biBankSel0
-      req.biBankSel1 := sampleRequestPrep.payload.biBankSel1
-      req.biBankSel2 := sampleRequestPrep.payload.biBankSel2
-      req.biBankSel3 := sampleRequestPrep.payload.biBankSel3
       req.lodBase := sampleRequestPrep.payload.lodBase
       req.lodShift := sampleRequestPrep.payload.lodShift
       req.is16Bit := sampleRequestPrep.payload.is16Bit
@@ -564,6 +551,17 @@ case class Tmu(c: voodoo.Config) extends Component {
           startupTexEnd,
           startupTexShift
         )
+        val loc = Tmu.packedLocation22(
+          tapAddr(i).resize(22 bits),
+          sampleRequestPrep.payload.is16Bit,
+          sampleRequestPrep.payload.lodBase.resize(22 bits),
+          sampleRequestPrep.payload.lodShift,
+          startupTexBase,
+          startupTexEnd,
+          startupTexShift
+        )
+        req.tapPackedBank(i) := loc._2
+        req.tapPackedPair(i) := loc._3
       }
       req.bilinear := sampleRequestPrep.payload.bilinear
       req.passthrough := sampleRequestPrep.payload.passthrough
@@ -830,11 +828,6 @@ object Tmu {
     dst.biAddr1 := src.biAddr1
     dst.biAddr2 := src.biAddr2
     dst.biAddr3 := src.biAddr3
-    dst.pointBankSel := src.pointBankSel
-    dst.biBankSel0 := src.biBankSel0
-    dst.biBankSel1 := src.biBankSel1
-    dst.biBankSel2 := src.biBankSel2
-    dst.biBankSel3 := src.biBankSel3
     dst.lodBase := src.lodBase
     dst.lodShift := src.lodShift
     dst.is16Bit := src.is16Bit
@@ -845,6 +838,8 @@ object Tmu {
       for (byteIdx <- 0 until 4) {
         dst.tapStartupDecode(i).bank(byteIdx) := src.tapStartupDecode(i).bank(byteIdx)
       }
+      dst.tapPackedBank(i) := src.tapPackedBank(i)
+      dst.tapPackedPair(i) := src.tapPackedPair(i)
     }
     dst.bilinear := src.bilinear
     dst.passthrough.format := src.passthrough.format
@@ -973,16 +968,13 @@ object Tmu {
     val biAddr1 = UInt(c.addressWidth.value bits)
     val biAddr2 = UInt(c.addressWidth.value bits)
     val biAddr3 = UInt(c.addressWidth.value bits)
-    val pointBankSel = UInt(2 bits)
-    val biBankSel0 = UInt(2 bits)
-    val biBankSel1 = UInt(2 bits)
-    val biBankSel2 = UInt(2 bits)
-    val biBankSel3 = UInt(2 bits)
     val lodBase = UInt(c.addressWidth.value bits)
     val lodShift = UInt(4 bits)
     val is16Bit = Bool()
     val texTables = if (c.packedTexLayout) TexLayoutTables.Tables() else null
     val tapStartupDecode = Vec(PackedStartupDecode(), 4)
+    val tapPackedBank = Vec(UInt(2 bits), 4)
+    val tapPackedPair = Vec(Bool(), 4)
     val bilinear = Bool()
     val passthrough = TmuPassthrough(c)
   }
@@ -993,11 +985,6 @@ object Tmu {
     val biAddr1 = UInt(c.addressWidth.value bits)
     val biAddr2 = UInt(c.addressWidth.value bits)
     val biAddr3 = UInt(c.addressWidth.value bits)
-    val pointBankSel = UInt(2 bits)
-    val biBankSel0 = UInt(2 bits)
-    val biBankSel1 = UInt(2 bits)
-    val biBankSel2 = UInt(2 bits)
-    val biBankSel3 = UInt(2 bits)
     val lodBase = UInt(c.addressWidth.value bits)
     val lodShift = UInt(4 bits)
     val is16Bit = Bool()
@@ -1009,13 +996,13 @@ object Tmu {
 
   case class CachedReq(c: voodoo.Config, bankEntryWidth: Int) extends Bundle {
     val lineBase = UInt(c.addressWidth.value bits)
+    val bankSel = UInt(2 bits)
+    val bankEntry = UInt(bankEntryWidth bits)
     val lodBase = UInt(c.addressWidth.value bits)
     val lodShift = UInt(4 bits)
     val is16Bit = Bool()
     val texTables = if (c.packedTexLayout) TexLayoutTables.Tables() else null
     val startupDecode = PackedStartupDecode()
-    val bankSel = UInt(2 bits)
-    val bankEntry = UInt(bankEntryWidth bits)
   }
 
   case class SampleFetch(c: voodoo.Config) extends Bundle {

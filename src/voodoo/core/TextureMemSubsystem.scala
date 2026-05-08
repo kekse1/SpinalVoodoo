@@ -21,6 +21,7 @@ case class TextureMemSubsystem(c: Config) extends Component {
     TextureMem.WriteCmd.toBmb(cpuTexWriteCmd, voodoo.Core.cpuTexBmbParams, source = 0)
 
   private val tmuTexCmd = io.tmuTexRead.cmd.s2mPipe()
+  private val cpuTexReadCmd = io.cpuTexRead.cmd.queue(2)
   private val cmdRouteWidth = log2Up(3)
   private val texMemSourceWidth = voodoo.Core.texMemBmbParams(c).access.sourceWidth
 
@@ -30,7 +31,7 @@ case class TextureMemSubsystem(c: Config) extends Component {
 
   private val useTmuTex = tmuTexCmd.valid
   private val useCpuTexWrite = !useTmuTex && cpuTexWriteBus.cmd.valid
-  private val useCpuTexRead = !useTmuTex && !useCpuTexWrite && io.cpuTexRead.cmd.valid
+  private val useCpuTexRead = !useTmuTex && !useCpuTexWrite && cpuTexReadCmd.valid
 
   io.texMem.cmd.valid := False
   io.texMem.cmd.opcode := tmuTexCmd.opcode
@@ -64,22 +65,22 @@ case class TextureMemSubsystem(c: Config) extends Component {
   }
   when(useCpuTexRead) {
     io.texMem.cmd.valid := True
-    io.texMem.cmd.opcode := io.cpuTexRead.cmd.opcode
-    io.texMem.cmd.address := io.cpuTexRead.cmd.address.resize(io.texMem.p.access.addressWidth bits)
+    io.texMem.cmd.opcode := cpuTexReadCmd.opcode
+    io.texMem.cmd.address := cpuTexReadCmd.address.resize(io.texMem.p.access.addressWidth bits)
     io.texMem.cmd.data := 0
     io.texMem.cmd.mask := 0
-    io.texMem.cmd.length := io.cpuTexRead.cmd.length.resize(io.texMem.p.access.lengthWidth bits)
-    io.texMem.cmd.last := io.cpuTexRead.cmd.last
-    io.texMem.cmd.source := routedSource(io.cpuTexRead.cmd, 2)
+    io.texMem.cmd.length := cpuTexReadCmd.length.resize(io.texMem.p.access.lengthWidth bits)
+    io.texMem.cmd.last := cpuTexReadCmd.last
+    io.texMem.cmd.source := routedSource(cpuTexReadCmd, 2)
     if (io.texMem.p.access.contextWidth > 0) {
-      io.texMem.cmd.context := io.cpuTexRead.cmd.context
+      io.texMem.cmd.context := cpuTexReadCmd.context
         .resize(io.texMem.p.access.contextWidth bits)
     }
   }
 
   tmuTexCmd.ready := useTmuTex && io.texMem.cmd.ready
   cpuTexWriteBus.cmd.ready := useCpuTexWrite && io.texMem.cmd.ready
-  io.cpuTexRead.cmd.ready := useCpuTexRead && io.texMem.cmd.ready
+  cpuTexReadCmd.ready := useCpuTexRead && io.texMem.cmd.ready
 
   val rspRoute = io.texMem.rsp.source(cmdRouteWidth - 1 downto 0)
   val rspSource = (io.texMem.rsp.source >> cmdRouteWidth).resized

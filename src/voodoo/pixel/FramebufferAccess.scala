@@ -30,6 +30,7 @@ case class FramebufferAccess(c: Config) extends Component {
     // Pipeline busy: pixels in flight inside fork-queue-join
     val busy = out Bool ()
     val zFuncFail = out Bool ()
+    val debug = out Bits (32 bits)
   }
   io.input.valid.simPublic()
   io.input.ready.simPublic()
@@ -209,7 +210,14 @@ case class FramebufferAccess(c: Config) extends Component {
     rsp.data := 0
     rsp
   }
-  val colorRsp = StreamArbiterFactory.lowerFirst.on(Seq(colorFetched, colorBypass))
+  val colorRsp = Stream(FramebufferPlaneBuffer.ReadRsp())
+  colorRsp.valid := colorFetched.valid || colorBypass.valid
+  colorRsp.payload := colorBypass.payload
+  when(colorFetched.valid) {
+    colorRsp.payload := colorFetched.payload
+  }
+  colorFetched.ready := colorRsp.ready
+  colorBypass.ready := colorRsp.ready && !colorFetched.valid
 
   val auxCtlRoutes = StreamDemux(auxCtlBase, auxCtlBase.payload.needAuxRead.asUInt, 2)
   val auxFetched = StreamJoin(auxCtlRoutes(1).queue(32), auxRspBuf).translateWith {
@@ -222,7 +230,14 @@ case class FramebufferAccess(c: Config) extends Component {
     rsp.data := 0
     rsp
   }
-  val auxRsp = StreamArbiterFactory.lowerFirst.on(Seq(auxFetched, auxBypass))
+  val auxRsp = Stream(FramebufferPlaneBuffer.ReadRsp())
+  auxRsp.valid := auxFetched.valid || auxBypass.valid
+  auxRsp.payload := auxBypass.payload
+  when(auxFetched.valid) {
+    auxRsp.payload := auxFetched.payload
+  }
+  auxFetched.ready := auxRsp.ready
+  auxBypass.ready := auxRsp.ready && !auxFetched.valid
 
   val fetchedRaw = StreamJoin(StreamJoin(colorRsp, auxRsp), passMeta).translateWith {
     val out = FetchResult()
@@ -379,6 +394,36 @@ case class FramebufferAccess(c: Config) extends Component {
       prep
     }
     .m2sPipe()
+
+  io.debug := 0
+  io.debug(0) := io.input.valid
+  io.debug(1) := io.input.ready
+  io.debug(2) := io.output.valid
+  io.debug(3) := io.output.ready
+  io.debug(4) := io.busy
+  io.debug(5) := io.fbReadColorReq.valid
+  io.debug(6) := io.fbReadColorReq.ready
+  io.debug(7) := io.fbReadColorRsp.valid
+  io.debug(8) := io.fbReadColorRsp.ready
+  io.debug(9) := io.fbReadAuxReq.valid
+  io.debug(10) := io.fbReadAuxReq.ready
+  io.debug(11) := io.fbReadAuxRsp.valid
+  io.debug(12) := io.fbReadAuxRsp.ready
+  io.debug(13) := requestStream.valid
+  io.debug(14) := requestStream.ready
+  io.debug(15) := colorCtlBase.valid
+  io.debug(16) := colorCtlBase.ready
+  io.debug(17) := auxCtlBase.valid
+  io.debug(18) := auxCtlBase.ready
+  io.debug(19) := passMeta.valid
+  io.debug(20) := passMeta.ready
+  io.debug(21) := colorFetched.valid
+  io.debug(22) := colorBypass.valid
+  io.debug(23) := auxFetched.valid
+  io.debug(24) := auxBypass.valid
+  io.debug(25) := fetched.valid
+  io.debug(26) := fetched.ready
+  io.debug(31 downto 27) := inFlightCount.asBits
 
   val blendPdata = blendPrep.payload.passthrough
   val srcFactor = applyBlendScale(blendPdata.color, blendPrep.payload.srcScale)

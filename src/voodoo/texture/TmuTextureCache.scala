@@ -25,7 +25,6 @@ case class TmuTextureCacheLookupCtx(c: voodoo.Config, setBits: Int, bankEntryWid
   val epoch = UInt(8 bits)
   val tapActive = Vec(Bool(), 4)
   val tapBank = Vec(UInt(2 bits), 4)
-  val tapPair = Vec(Bool(), 4)
   val tapSet = Vec(UInt(setBits bits), 4)
   val tapLineBase = Vec(UInt(c.addressWidth.value bits), 4)
   val tapBankEntry = Vec(UInt(bankEntryWidth bits), 4)
@@ -44,18 +43,6 @@ case class TmuTextureCacheCompareStage(
   val tapHit = Vec(Bool(), 4)
   val tapSetMeta = Vec(TmuTextureCacheSetMeta(c, wayCount), 4)
   val tapData = Vec(Bits(32 bits), 4)
-  val missSet = UInt(setBits bits)
-  val missLineBase = UInt(c.addressWidth.value bits)
-  val missBank = UInt(2 bits)
-  val missBankEntry = UInt(bankEntryWidth bits)
-  val missValidVec = Vec(Bool(), wayCount)
-  val missSetMeta = TmuTextureCacheSetMeta(c, wayCount)
-}
-
-case class TmuTextureCacheDataStage(c: voodoo.Config) extends Bundle {
-  val bilinear = Bool()
-  val passthrough = Tmu.TmuPassthrough(c)
-  val texels = Vec(Bits(16 bits), 4)
 }
 
 case class TmuTextureCacheReplayReq(c: voodoo.Config) extends Bundle {
@@ -74,11 +61,8 @@ case class TmuTextureCacheFillStart(
   val set = UInt(setBits bits)
   val way = UInt(wayBits bits)
   val slot = UInt(slotBits bits)
-  val evictValid = Bool()
-  val evictReady = Bool()
   val setMeta = TmuTextureCacheSetMeta(c, wayCount)
   val req = Tmu.CachedReq(c, bankEntryWidth)
-  val directPoint = Bool()
   val passthrough = Tmu.TmuPassthrough(c)
 }
 
@@ -115,18 +99,8 @@ abstract class TmuTexturePathBase(val c: voodoo.Config) extends Component {
     if (i == 0) (req.bilinear ? req.biAddr0 | req.pointAddr)
     else Seq(req.biAddr1, req.biAddr2, req.biAddr3)(i - 1)
 
-  protected def pointOrBilinearBank(req: Tmu.SampleRequest, i: Int): UInt = {
-    val loc = Tmu.packedLocation22(
-      pointOrBilinearAddr(req, i),
-      req.is16Bit,
-      req.lodBase,
-      req.lodShift,
-      (0 until 9).map(req.texTables.texBase(_)),
-      (0 until 9).map(req.texTables.texEnd(_)),
-      (0 until 9).map(req.texTables.texShift(_))
-    )
-    loc._2
-  }
+  protected def pointOrBilinearBank(req: Tmu.SampleRequest, i: Int): UInt =
+    req.tapPackedBank(i)
 
   protected def texel16(word: Bits, half: Bool, byte: Bool, is16Bit: Bool): Bits = {
     val out = Bits(16 bits)
@@ -136,18 +110,8 @@ abstract class TmuTexturePathBase(val c: voodoo.Config) extends Component {
     out
   }
 
-  protected def packedPairSel(req: Tmu.SampleRequest, i: Int): Bool = {
-    val loc = Tmu.packedLocation22(
-      pointOrBilinearAddr(req, i),
-      req.is16Bit,
-      req.lodBase,
-      req.lodShift,
-      (0 until 9).map(req.texTables.texBase(_)),
-      (0 until 9).map(req.texTables.texEnd(_)),
-      (0 until 9).map(req.texTables.texShift(_))
-    )
-    loc._3
-  }
+  protected def packedPairSel(req: Tmu.SampleRequest, i: Int): Bool =
+    req.tapPackedPair(i)
 
   protected def bankTexel(word: Bits, pairSel: Bool): Bits =
     Mux(pairSel, word(31 downto 16), word(15 downto 0))
@@ -177,53 +141,6 @@ case class TmuTextureCache(
   def cacheIndex(slot: UInt, entry: UInt, slotBits: Int, entryBits: Int): UInt = (((slot.resize(
     slotBits bits
   ) ## U(0, entryBits bits)) | entry.resize(slotBits + entryBits bits).asBits).asUInt)
-
-  val texFillHits = Reg(UInt(32 bits)) init 0
-  val texFillMisses = Reg(UInt(32 bits)) init 0
-  val texFillBurstCount = Reg(UInt(32 bits)) init 0
-  val texFillBurstBeats = Reg(UInt(32 bits)) init 0
-  val texFillStallCycles = Reg(UInt(32 bits)) init 0
-  val texFastBilinearHits = Reg(UInt(32 bits)) init 0
-  val texCompareMissSamples = Reg(UInt(32 bits)) init 0
-  val texLookupBlockedCycles = Reg(UInt(32 bits)) init 0
-  val texLookupBlockedByOwnerCycles = Reg(UInt(32 bits)) init 0
-  val texLookupBlockedByFillCycles = Reg(UInt(32 bits)) init 0
-  val texLookupBlockedByHoldCycles = Reg(UInt(32 bits)) init 0
-  val texLookupBlockedByLiveCycles = Reg(UInt(32 bits)) init 0
-  val texFillEvictValid = Reg(UInt(32 bits)) init 0
-  val texFillEvictReady = Reg(UInt(32 bits)) init 0
-  val texFillEvictInflight = Reg(UInt(32 bits)) init 0
-  markSimulationOnly(
-    texFillHits,
-    texFillMisses,
-    texFastBilinearHits,
-    texCompareMissSamples,
-    texLookupBlockedCycles,
-    texLookupBlockedByOwnerCycles,
-    texLookupBlockedByFillCycles,
-    texLookupBlockedByHoldCycles,
-    texLookupBlockedByLiveCycles,
-    texFillEvictValid,
-    texFillEvictReady,
-    texFillEvictInflight
-  )
-  withTrace(
-    texFillHits,
-    texFillMisses,
-    texFillBurstCount,
-    texFillBurstBeats,
-    texFillStallCycles,
-    texFastBilinearHits,
-    texCompareMissSamples,
-    texLookupBlockedCycles,
-    texLookupBlockedByOwnerCycles,
-    texLookupBlockedByFillCycles,
-    texLookupBlockedByHoldCycles,
-    texLookupBlockedByLiveCycles,
-    texFillEvictValid,
-    texFillEvictReady,
-    texFillEvictInflight
-  )
 
   val reqStream = io.sampleRequest.queue(c.texFillRequestWindow)
 
@@ -274,8 +191,7 @@ case class TmuTextureCache(
   def lineBase22Of(addr: UInt): UInt =
     Tmu.lineBase22Of(addr, lineByteShift)
   def pointOrBilinearLineBase22(req: Tmu.SampleRequest, i: Int): UInt =
-    if (i == 0) (req.bilinear ? lineBase22Of(req.biAddr0) | lineBase22Of(req.pointAddr))
-    else lineBase22Of(Seq(req.biAddr1, req.biAddr2, req.biAddr3)(i - 1))
+    lineBase22Of(pointOrBilinearAddr(req, i))
   def setOf(base: UInt): UInt = {
     if (setCount == 1) U(0, setBits bits)
     else {
@@ -434,7 +350,6 @@ case class TmuTextureCache(
     val base = lineBaseOf(addr)
     lookupCtx.tapActive(i) := active
     lookupCtx.tapBank(i) := bank
-    lookupCtx.tapPair(i) := packedPairSel(lookupSource.payload.sample, i)
     lookupCtx.tapLineBase(i) := base
     lookupCtx.tapSet(i) := setOf(base)
     lookupCtx.tapBankEntry(i) := bankEntryOf(addr, base)
@@ -466,14 +381,8 @@ case class TmuTextureCache(
     start.set := tapSet
     start.way := chosenWay
     start.slot := slotOf(tapSet, chosenWay)
-    start.evictValid := False
-    start.evictReady := False
     for (way <- 0 until wayCount) {
       start.setMeta.ways(way) := tapSetMeta.ways(way)
-      when(chosenWay === U(way, wayBits bits)) {
-        start.evictValid := tapSetMeta.ways(way).valid
-        start.evictReady := tapSetMeta.ways(way).ready
-      }
     }
     start.setMeta.victim := (chosenWay + 1).resize(start.setMeta.victim.getWidth bits)
     for (way <- 0 until wayCount) {
@@ -485,14 +394,13 @@ case class TmuTextureCache(
       }
     }
     start.req.lineBase := tapLineBase
+    start.req.bankSel := tapBanks(tapIdx)
+    start.req.bankEntry := tapEntry
     start.req.lodBase := sample.lodBase
     start.req.lodShift := sample.lodShift
     start.req.is16Bit := sample.is16Bit
     start.req.texTables := sample.texTables
     start.req.startupDecode := sample.tapStartupDecode(tapIdx)
-    start.req.bankSel := tapBanks(tapIdx)
-    start.req.bankEntry := tapEntry
-    start.directPoint := !sample.bilinear
     start.passthrough := sample.passthrough
     start
   }
@@ -554,37 +462,6 @@ case class TmuTextureCache(
     .map(i => lookupRspCtx.tapActive(i) && !hitOk(i))
     .reduce(_ || _)
 
-  val missIdx = UInt(2 bits)
-  missIdx := 0
-  when(lookupRspCtx.tapActive(0) && !hitOk(0)) {
-    missIdx := 0
-  } elsewhen (lookupRspCtx.tapActive(1) && !hitOk(1)) {
-    missIdx := 1
-  } elsewhen (lookupRspCtx.tapActive(2) && !hitOk(2)) {
-    missIdx := 2
-  } elsewhen (lookupRspCtx.tapActive(3) && !hitOk(3)) {
-    missIdx := 3
-  }
-
-  arrivedCompare.missSet := lookupRspCtx.tapSet(missIdx)
-  arrivedCompare.missLineBase := lookupRspCtx.tapLineBase(missIdx)
-  arrivedCompare.missBank := lookupRspCtx.tapBank(missIdx)
-  arrivedCompare.missBankEntry := lookupRspCtx.tapBankEntry(missIdx)
-  for (way <- 0 until wayCount) {
-    arrivedCompare.missValidVec(way) := metaRead(0).rsp.ways(way).valid
-    when(missIdx === 1) { arrivedCompare.missValidVec(way) := metaRead(1).rsp.ways(way).valid }
-    when(missIdx === 2) { arrivedCompare.missValidVec(way) := metaRead(2).rsp.ways(way).valid }
-    when(missIdx === 3) { arrivedCompare.missValidVec(way) := metaRead(3).rsp.ways(way).valid }
-    arrivedCompare.missSetMeta.ways(way) := metaRead(0).rsp.ways(way)
-    when(missIdx === 1) { arrivedCompare.missSetMeta.ways(way) := metaRead(1).rsp.ways(way) }
-    when(missIdx === 2) { arrivedCompare.missSetMeta.ways(way) := metaRead(2).rsp.ways(way) }
-    when(missIdx === 3) { arrivedCompare.missSetMeta.ways(way) := metaRead(3).rsp.ways(way) }
-  }
-  arrivedCompare.missSetMeta.victim := metaRead(0).rsp.victim
-  when(missIdx === 1) { arrivedCompare.missSetMeta.victim := metaRead(1).rsp.victim }
-  when(missIdx === 2) { arrivedCompare.missSetMeta.victim := metaRead(2).rsp.victim }
-  when(missIdx === 3) { arrivedCompare.missSetMeta.victim := metaRead(3).rsp.victim }
-
   when(!compareHoldValid) {
     compareStage := arrivedCompare
     compareValid := lookupRspValid
@@ -595,22 +472,6 @@ case class TmuTextureCache(
   val liveCompareBlocks = lookupRspValid && (!arrivedCompare.allHits || !liveHitCanConsume)
   lookupBlocked := initSweepActive || owner.active || fill.activeReg || compareHoldValid || liveCompareBlocks
   compareConsumeHit := compareValid && compareStage.allHits && !fillFetchRsp.valid && io.sampleFetch.ready
-  when(lookupBlocked) {
-    texLookupBlockedCycles := texLookupBlockedCycles + 1
-    when(owner.active) {
-      texLookupBlockedByOwnerCycles := texLookupBlockedByOwnerCycles + 1
-    }
-    when(fill.activeReg) {
-      texLookupBlockedByFillCycles := texLookupBlockedByFillCycles + 1
-    }
-    when(compareHoldValid) {
-      texLookupBlockedByHoldCycles := texLookupBlockedByHoldCycles + 1
-    }
-    when(liveCompareBlocks) {
-      texLookupBlockedByLiveCycles := texLookupBlockedByLiveCycles + 1
-    }
-  }
-
   val compareTapActive = Vec(
     (0 until tapCount).map(i => if (i == 0) True else compareStage.sample.bilinear)
   )
@@ -652,15 +513,7 @@ case class TmuTextureCache(
     compareHoldValid := False
   }
 
-  when(compareConsumeHit) {
-    texFillHits := texFillHits + (compareStage.sample.bilinear ? U(4, 32 bits) | U(1, 32 bits))
-    when(compareStage.sample.bilinear) {
-      texFastBilinearHits := texFastBilinearHits + 1
-    }
-  }
-
   when(compareConsumeMiss) {
-    texCompareMissSamples := texCompareMissSamples + 1
     owner.active := True
     owner.sample := compareStage.sample
     owner.epoch := compareStage.epoch
@@ -841,8 +694,16 @@ case class TmuTextureCache(
   continueFillStart.valid := continuePendingValid
   continueFillStart.payload := continuePayload(continuePendingIdx)
 
-  val fillStart =
-    StreamArbiterFactory.lowerFirst.noLock.onArgs(continueFillStart, compareFillStart)
+  val fillStart = Stream(
+    TmuTextureCacheFillStart(c, slotBits, setBits, bankEntryWidth, wayBits, wayCount)
+  )
+  fillStart.valid := continueFillStart.valid || compareFillStart.valid
+  fillStart.payload := compareFillStart.payload
+  when(continueFillStart.valid) {
+    fillStart.payload := continueFillStart.payload
+  }
+  continueFillStart.ready := fillStart.ready
+  compareFillStart.ready := fillStart.ready && !continueFillStart.valid
 
   io.texRead.cmd << fillStart.translateWith {
     val cmd = cloneOf(io.texRead.cmd.payload)
@@ -866,17 +727,6 @@ case class TmuTextureCache(
     metaWriteEnable := True
     metaWriteSet := fillStart.payload.set
     metaWriteData := fillStart.payload.setMeta
-    texFillMisses := texFillMisses + 1
-    texFillBurstCount := texFillBurstCount + 1
-    texFillBurstBeats := texFillBurstBeats + U(lineWords, 32 bits)
-    when(fillStart.payload.evictValid) {
-      texFillEvictValid := texFillEvictValid + 1
-      when(fillStart.payload.evictReady) {
-        texFillEvictReady := texFillEvictReady + 1
-      } otherwise {
-        texFillEvictInflight := texFillEvictInflight + 1
-      }
-    }
   }
 
   val startTexEnd = Vec((0 until 9).map { lod =>
@@ -934,9 +784,6 @@ case class TmuTextureCache(
 
   when(fillRsp.fire) {
     fill.rspCount := fill.rspCount + 1
-    when(fill.req.bankEntry === wordEntry && pairMask(fill.req.bankSel).orR) {
-      texFillStallCycles := texFillStallCycles + 1
-    }
     when(fillRsp.last) {
       fill.activeReg := False
       fill.setMeta := readySetMeta

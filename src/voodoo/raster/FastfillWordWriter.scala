@@ -83,10 +83,12 @@ case class FastfillWordWriter(c: Config) extends Component {
   wordStream.payload.yOrigin := regs.fbzMode.yOrigin
   wordStream.payload.yOriginSwapValue := regs.yOriginSwapValue
 
-  val nextWordX = (curWordX + 2).resize(10 bits)
-  val atRowEnd = nextWordX >= clipRight
-  val nextY = (curY + 1).resize(10 bits)
-  val isLastWord = atRowEnd && nextY >= clipHighY
+  val nextWordXWide = curWordX.resize(11 bits) + 2
+  val nextWordX = nextWordXWide.resize(10 bits)
+  val atRowEnd = nextWordXWide >= clipRight.resize(11 bits)
+  val nextYWide = curY.resize(11 bits) + 1
+  val nextY = nextYWide.resize(10 bits)
+  val isLastWord = atRowEnd && nextYWide >= clipHighY.resize(11 bits)
 
   when(wordStream.fire) {
     when(isLastWord) {
