@@ -11,8 +11,10 @@ object CoreDe10SimGen extends App {
   }
   def argIntValue(name: String): Option[Int] = argValue(name).map(_.toInt)
 
-  val defaultConfig =
-    Config.voodoo1(trace = TraceConfig(enabled = enableTrace)).copy(useFbWriteBuffer = true)
+  val defaultConfig: Config =
+    Config
+      .voodoo1(trace = TraceConfig(enabled = enableTrace))
+      .copy(useFbWriteBuffer = true, fbWriteBufferLineWords = 256, useFbReadCache = false)
   val useFbWriteBuffer =
     if (args.contains("--no-fb-write-buffer")) false
     else defaultConfig.useFbWriteBuffer
@@ -24,6 +26,11 @@ object CoreDe10SimGen extends App {
     if (args.contains("--tex-fill-cache")) true
     else if (args.contains("--no-tex-fill-cache")) false
     else defaultConfig.useTexFillCache
+  val enableTmu = !args.contains("--no-tmu")
+  val enableFog = !args.contains("--no-fog")
+  val enableDither = !args.contains("--no-dither")
+  val enableChromaKey = !args.contains("--no-chroma-key")
+  val enableAlphaTest = !args.contains("--no-alpha-test")
 
   val report = GenSupport
     .simVerilog()
@@ -34,6 +41,11 @@ object CoreDe10SimGen extends App {
             useFbWriteBuffer = useFbWriteBuffer,
             useFbReadCache = useFbReadCache,
             useTexFillCache = useTexFillCache,
+            enableTmu = enableTmu,
+            enableFog = enableFog,
+            enableDither = enableDither,
+            enableChromaKey = enableChromaKey,
+            enableAlphaTest = enableAlphaTest,
             texFillLineWords =
               argIntValue("--tex-fill-line-words").getOrElse(Config.voodoo1().texFillLineWords),
             texFillCacheSlots =

@@ -174,7 +174,6 @@ case class PixelPipeline(c: Config) extends Component {
     val pciFifoEmpty = in Bool ()
     val fbStatus = in(FramebufferMemStatus())
     val fbStats = in(FramebufferMemStats())
-
     val texRead = master(Bmb(Tmu.bmbParams(c)))
     val lfbReadBus = master(Bmb(Lfb.fbReadBmbParams(c)))
     val colorReadReq = master(Stream(FramebufferPlaneBuffer.ReadReq(c)))
@@ -223,11 +222,8 @@ case class PixelPipeline(c: Config) extends Component {
   val rasterizer = Rasterizer(c)
   val fastfillWriter = FastfillWordWriter(c)
   val lfb = Lfb(c)
-  val tmu = Tmu(c)
   val colorCombine = ColorCombine(c)
-  val fog = Fog(c)
   val fbAccess = FramebufferAccess(c)
-  val dither = Dither()
   val writeColor = Write(c)
   val writeAux = Write(c)
 
@@ -237,12 +233,8 @@ case class PixelPipeline(c: Config) extends Component {
   triangleSetup.o.simPublic()
   rasterizer.i.simPublic()
   rasterizer.o.simPublic()
-  tmu.io.input.simPublic()
-  tmu.io.output.simPublic()
   colorCombine.io.input.simPublic()
   colorCombine.io.output.simPublic()
-  fog.io.input.simPublic()
-  fog.io.output.simPublic()
   fbAccess.io.input.simPublic()
   fbAccess.io.output.simPublic()
   writeColor.i.fromPipeline.simPublic()
@@ -273,17 +265,6 @@ case class PixelPipeline(c: Config) extends Component {
   lfb.io.pciFifoEmpty := io.pciFifoEmpty
   io.lfbReadBus <> lfb.io.fbReadBus
 
-  tmu.io.paletteWrite << io.paletteWrite.translateWith {
-    val out = Tmu.PaletteWrite()
-    out.address := io.paletteWrite.payload.address
-    out.data := io.paletteWrite.payload.data
-    out
-  }
-  tmu.io.sendConfig := io.controls.syncRender.tmuSendConfig
-  tmu.io.nccTables := io.controls.nccTables
-  tmu.io.invalidate := io.tmuInvalidate
-  io.texRead <> tmu.io.texRead
-
   val yOriginEnable = io.controls.fastfill.fbzMode.yOrigin
   val yOriginSwapValue = io.controls.fastfill.yOriginSwapValue
   val rasterYTransformed = rasterizer.o.map { out =>
@@ -305,11 +286,58 @@ case class PixelPipeline(c: Config) extends Component {
     .stage()
     .stage()
 
-  val tmuInput = Stream(Tmu.Input(c))
-  tmuInput.translateFrom(rasterFork._1.stage())((out, in) => out := Tmu.Input.fromRasterizer(c, in))
-  tmuInput >/-> tmu.io.input
+  val tmuOutput = Stream(Tmu.Output(c))
+  val tmuInputValid = Bool()
+  val tmuBusy = Bool()
 
-  val tmuJoined = StreamJoin(tmu.io.output.stage(), postTmuQueue)
+  if (c.enableTmu) {
+    val tmu = Tmu(c)
+    tmu.io.input.simPublic()
+    tmu.io.output.simPublic()
+    tmu.io.paletteWrite << io.paletteWrite.translateWith {
+      val out = Tmu.PaletteWrite()
+      out.address := io.paletteWrite.payload.address
+      out.data := io.paletteWrite.payload.data
+      out
+    }
+    tmu.io.sendConfig := io.controls.syncRender.tmuSendConfig
+    tmu.io.nccTables := io.controls.nccTables
+    tmu.io.invalidate := io.tmuInvalidate
+    io.texRead <> tmu.io.texRead
+
+    val tmuInput = Stream(Tmu.Input(c))
+    tmuInput.translateFrom(rasterFork._1.stage())((out, in) =>
+      out := Tmu.Input.fromRasterizer(c, in)
+    )
+    tmuInput >/-> tmu.io.input
+    tmuOutput << tmu.io.output
+    tmuInputValid := tmu.io.input.valid
+    tmuBusy := tmu.io.busy
+  } else {
+    tmuOutput.translateFrom(rasterFork._1.stage()) { (out, in) =>
+      out.texture.r := 0
+      out.texture.g := 0
+      out.texture.b := 0
+      out.textureAlpha := 0
+      if (c.trace.enabled) out.trace := in.trace
+    }
+    io.texRead.cmd.valid := False
+    io.texRead.cmd.opcode := Bmb.Cmd.Opcode.READ
+    io.texRead.cmd.address := 0
+    if (io.texRead.cmd.data != null) io.texRead.cmd.data := 0
+    if (io.texRead.cmd.mask != null) io.texRead.cmd.mask := 0
+    io.texRead.cmd.length := 0
+    io.texRead.cmd.last := True
+    io.texRead.cmd.source := 0
+    if (io.texRead.p.access.contextWidth > 0) {
+      io.texRead.cmd.context := 0
+    }
+    io.texRead.rsp.ready := True
+    tmuInputValid := False
+    tmuBusy := False
+  }
+
+  val tmuJoined = StreamJoin(tmuOutput.stage(), postTmuQueue)
   if (c.trace.enabled) {
     postTmuQueue.simPublic()
     tmuJoined.simPublic()
@@ -347,19 +375,57 @@ case class PixelPipeline(c: Config) extends Component {
   val ckG = ckBits(15 downto 8).asUInt
   val ckB = ckBits(7 downto 0).asUInt
   val ccColor = colorCombine.io.output.payload.color
-  val chromaKill = colorCombine.io.output.payload.fbzMode.enableChromaKey &&
-    ccColor.r === ckR && ccColor.g === ckG && ccColor.b === ckB
+  val chromaKill =
+    if (c.enableChromaKey)
+      colorCombine.io.output.payload.fbzMode.enableChromaKey && ccColor.r === ckR &&
+      ccColor.g === ckG && ccColor.b === ckB
+    else False
 
-  fog.io.fogTable := io.controls.fogTable
-  val fogArbiterInput =
-    StreamArbiterFactory.lowerFirst.on(Seq(colorCombine.io.output, lfb.io.pipelineOutput))
-  fogArbiterInput >/-> fog.io.input
+  val fogArbiterInput = Stream(ColorCombine.Output(c))
+  fogArbiterInput.valid := colorCombine.io.output.valid || lfb.io.pipelineOutput.valid
+  fogArbiterInput.payload := lfb.io.pipelineOutput.payload
+  when(colorCombine.io.output.valid) {
+    fogArbiterInput.payload := colorCombine.io.output.payload
+  }
+  colorCombine.io.output.ready := fogArbiterInput.ready
+  lfb.io.pipelineOutput.ready := fogArbiterInput.ready && !colorCombine.io.output.valid
 
-  val alphaBits = fog.io.output.payload.alphaMode
+  val fogOutput = Stream(Fog.Output(c))
+  val fogBusy = Bool()
+
+  def assignFogBypass(dst: Fog.Output, src: ColorCombine.Output): Unit = {
+    dst.coords := src.coords
+    dst.color := src.color
+    dst.alpha := src.alpha
+    dst.depth := src.depth
+    dst.wDepth := 0
+    dst.colorBeforeFog := src.color
+    dst.chromaKey := src.chromaKey
+    dst.zaColor := src.zaColor
+    dst.alphaMode := src.alphaMode
+    dst.fbzMode := src.fbzMode
+    dst.routing := src.routing
+    if (c.trace.enabled) dst.trace := src.trace
+  }
+
+  if (c.enableFog) {
+    val fog = Fog(c)
+    fog.io.input.simPublic()
+    fog.io.output.simPublic()
+    fog.io.fogTable := io.controls.fogTable
+    fogArbiterInput >/-> fog.io.input
+    fogOutput << fog.io.output
+    fogBusy := fog.io.busy
+  } else {
+    fogOutput.translateFrom(fogArbiterInput.stage())((out, in) => assignFogBypass(out, in))
+    fogBusy := False
+  }
+
+  val alphaBits = fogOutput.payload.alphaMode
   val alphaTestEnable = alphaBits.alphaTestEnable
   val alphaFunc = alphaBits.alphaFunc
   val alphaRef = alphaBits.alphaRef
-  val srcAlpha = fog.io.output.payload.alpha
+  val srcAlpha = fogOutput.payload.alpha
   val alphaPassed = alphaFunc.mux(
     0 -> False,
     1 -> (srcAlpha < alphaRef),
@@ -370,19 +436,22 @@ case class PixelPipeline(c: Config) extends Component {
     6 -> (srcAlpha >= alphaRef),
     7 -> True
   )
-  val alphaKill = alphaTestEnable && !alphaPassed
+  val alphaKill = if (c.enableAlphaTest) alphaTestEnable && !alphaPassed else False
 
-  fog.io.output >/-> fbAccess.io.input
+  fogOutput >/-> fbAccess.io.input
   fbAccess.io.fbReadColorRsp << io.colorReadRsp
   fbAccess.io.fbReadAuxRsp << io.auxReadRsp
   io.colorReadReq << fbAccess.io.fbReadColorReq.s2mPipe()
   io.auxReadReq << fbAccess.io.fbReadAuxReq.s2mPipe()
 
   val fbAccessChromaKey = fbAccess.io.output.payload.chromaKey
-  val fbAccessChromaKill = fbAccess.io.output.payload.fbzMode.enableChromaKey &&
-    fbAccess.io.output.payload.colorBeforeFog.r === fbAccessChromaKey(23 downto 16).asUInt &&
-    fbAccess.io.output.payload.colorBeforeFog.g === fbAccessChromaKey(15 downto 8).asUInt &&
-    fbAccess.io.output.payload.colorBeforeFog.b === fbAccessChromaKey(7 downto 0).asUInt
+  val fbAccessChromaKill =
+    if (c.enableChromaKey)
+      fbAccess.io.output.payload.fbzMode.enableChromaKey &&
+      fbAccess.io.output.payload.colorBeforeFog.r === fbAccessChromaKey(23 downto 16).asUInt &&
+      fbAccess.io.output.payload.colorBeforeFog.g === fbAccessChromaKey(15 downto 8).asUInt &&
+      fbAccess.io.output.payload.colorBeforeFog.b === fbAccessChromaKey(7 downto 0).asUInt
+    else False
   val fbAccessAlphaBits = fbAccess.io.output.payload.alphaMode
   val fbAccessAlphaPassed = fbAccessAlphaBits.alphaFunc.mux(
     0 -> False,
@@ -394,7 +463,8 @@ case class PixelPipeline(c: Config) extends Component {
     6 -> (fbAccess.io.output.payload.alpha >= fbAccessAlphaBits.alphaRef),
     7 -> True
   )
-  val fbAccessAlphaKill = fbAccessAlphaBits.alphaTestEnable && !fbAccessAlphaPassed
+  val fbAccessAlphaKill =
+    if (c.enableAlphaTest) fbAccessAlphaBits.alphaTestEnable && !fbAccessAlphaPassed else False
   val afterFbKills = fbAccess.io.output.throwWhen(fbAccessChromaKill || fbAccessAlphaKill).stage()
 
   val trianglePreDither = afterFbKills
@@ -435,15 +505,32 @@ case class PixelPipeline(c: Config) extends Component {
     pixelsInCounter := pixelsInCounter + pixelsInDelta.resize(24 bits)
   }
 
-  val preDitherMerged = StreamArbiterFactory.lowerFirst
-    .on(Seq(trianglePreDither, lfb.io.writeOutput))
-    .stage()
+  val preDitherRaw = Stream(cloneOf(trianglePreDither.payload))
+  preDitherRaw.valid := trianglePreDither.valid || lfb.io.writeOutput.valid
+  preDitherRaw.payload := lfb.io.writeOutput.payload
+  when(trianglePreDither.valid) {
+    preDitherRaw.payload := trianglePreDither.payload
+  }
+  trianglePreDither.ready := preDitherRaw.ready
+  lfb.io.writeOutput.ready := preDitherRaw.ready && !trianglePreDither.valid
+  val preDitherMerged = preDitherRaw.stage()
 
   val (forDither, forPipe) = StreamFork2(preDitherMerged, synchronous = true)
-  dither.io.input.translateFrom(forDither)((ditIn, pd) => ditIn := Dither.Input.fromPreDither(pd))
+  val ditherOutput = Stream(Dither.Output())
+  if (c.enableDither) {
+    val dither = Dither()
+    dither.io.input.translateFrom(forDither)((ditIn, pd) => ditIn := Dither.Input.fromPreDither(pd))
+    ditherOutput << dither.io.output
+  } else {
+    ditherOutput.translateFrom(forDither.m2sPipe()) { (out, pd) =>
+      out.ditR := (pd.r >> 3).resize(5 bits)
+      out.ditG := (pd.g >> 2).resize(6 bits)
+      out.ditB := (pd.b >> 3).resize(5 bits)
+    }
+  }
 
   val preDitherPiped = forPipe.m2sPipe()
-  val ditherJoined = StreamJoin(dither.io.output, preDitherPiped)
+  val ditherJoined = StreamJoin(ditherOutput, preDitherPiped)
   val (forColorWrite, forAuxWrite) = StreamFork2(ditherJoined, synchronous = true)
 
   val colorWriteInput = forColorWrite
@@ -465,9 +552,24 @@ case class PixelPipeline(c: Config) extends Component {
 
   val fastfillColorWrite = fastfillWriter.io.colorWrite.s2mPipe()
   val fastfillAuxWrite = fastfillWriter.io.auxWrite.s2mPipe()
-  val colorWriteMerged =
-    StreamArbiterFactory.lowerFirst.on(Seq(fastfillColorWrite, writeColor.o.fbWrite))
-  val auxWriteMerged = StreamArbiterFactory.lowerFirst.on(Seq(fastfillAuxWrite, writeAux.o.fbWrite))
+
+  val colorWriteMerged = Stream(cloneOf(io.colorWrite.payload))
+  colorWriteMerged.valid := fastfillColorWrite.valid || writeColor.o.fbWrite.valid
+  colorWriteMerged.payload := writeColor.o.fbWrite.payload
+  when(fastfillColorWrite.valid) {
+    colorWriteMerged.payload := fastfillColorWrite.payload
+  }
+  fastfillColorWrite.ready := colorWriteMerged.ready
+  writeColor.o.fbWrite.ready := colorWriteMerged.ready && !fastfillColorWrite.valid
+
+  val auxWriteMerged = Stream(cloneOf(io.auxWrite.payload))
+  auxWriteMerged.valid := fastfillAuxWrite.valid || writeAux.o.fbWrite.valid
+  auxWriteMerged.payload := writeAux.o.fbWrite.payload
+  when(fastfillAuxWrite.valid) {
+    auxWriteMerged.payload := fastfillAuxWrite.payload
+  }
+  fastfillAuxWrite.ready := auxWriteMerged.ready
+  writeAux.o.fbWrite.ready := auxWriteMerged.ready && !fastfillAuxWrite.valid
 
   io.colorWrite << colorWriteMerged
   io.auxWrite << auxWriteMerged
@@ -487,11 +589,11 @@ case class PixelPipeline(c: Config) extends Component {
 
   io.debug.busy.triangleSetupValid := triangleSetup.o.valid
   io.debug.busy.rasterizerRunning := rasterizer.running
-  io.debug.busy.tmuInputValid := tmu.io.input.valid
-  io.debug.busy.tmuBusy := tmu.io.busy
+  io.debug.busy.tmuInputValid := tmuInputValid
+  io.debug.busy.tmuBusy := tmuBusy
   io.debug.busy.fbAccessBusy := fbAccess.io.busy
   io.debug.busy.colorCombineInputValid := colorCombine.io.input.valid
-  io.debug.busy.fogBusy := fog.io.busy
+  io.debug.busy.fogBusy := fogBusy
   io.debug.busy.fbAccessInputValid := fbAccess.io.input.valid
   io.debug.busy.writeColorInputValid := writeColor.i.fromPipeline.valid
   io.debug.busy.writeAuxInputValid := writeAux.i.fromPipeline.valid
@@ -506,8 +608,8 @@ case class PixelPipeline(c: Config) extends Component {
   io.debug.busy.preDitherMergedReady := preDitherMerged.ready
   io.debug.busy.preDitherPipedValid := preDitherPiped.valid
   io.debug.busy.preDitherPipedReady := preDitherPiped.ready
-  io.debug.busy.ditherOutputValid := dither.io.output.valid
-  io.debug.busy.ditherOutputReady := dither.io.output.ready
+  io.debug.busy.ditherOutputValid := ditherOutput.valid
+  io.debug.busy.ditherOutputReady := ditherOutput.ready
   io.debug.busy.ditherJoinedValid := ditherJoined.valid
   io.debug.busy.ditherJoinedReady := ditherJoined.ready
   io.debug.busy.colorForkValid := forColorWrite.valid
@@ -552,21 +654,70 @@ case class PixelPipeline(c: Config) extends Component {
   io.debug.writePath.aFuncFailNonZero := aFuncFailCounter.orR
 
   val pipelineBusySignal =
-    triangleSetup.o.valid || rasterizer.running || tmu.io.input.valid ||
-      tmu.io.busy || fbAccess.io.busy || io.fbStatus.colorBusy || io.fbStatus.auxBusy ||
-      colorCombine.io.input.valid || fog.io.busy || fbAccess.io.input.valid ||
+    triangleSetup.o.valid || rasterizer.running || tmuInputValid ||
+      tmuBusy || fbAccess.io.busy ||
+      colorCombine.io.input.valid || fogBusy || fbAccess.io.input.valid ||
       writeColor.i.fromPipeline.valid || writeAux.i.fromPipeline.valid ||
       writeColor.o.fbWrite.valid || writeAux.o.fbWrite.valid ||
-      fastfillWriter.io.running || fastfillWriter.io.wordValid || fastfillWriter.io.colorWrite.valid || fastfillWriter.io.auxWrite.valid ||
+      fastfillWriter.io.running || fastfillWriter.io.wordValid ||
+      fastfillWriter.io.colorWrite.valid || fastfillWriter.io.auxWrite.valid ||
       preDitherMerged.valid || preDitherPiped.valid ||
-      dither.io.output.valid || ditherJoined.valid ||
+      ditherOutput.valid || ditherJoined.valid ||
       forColorWrite.valid || forAuxWrite.valid ||
       colorWriteInput.valid || auxWriteInput.valid ||
       io.externalBusy.nopCmd || io.externalBusy.fastfillCmd ||
       io.externalBusy.swapbufferCmd || io.externalBusy.swapWaiting || lfb.io.busy
 
+  // Framebuffer writeback can drain to external memory after the ordered draw pipeline is idle.
+  // Status/sync must not wait on writeback-only busy, but LFB reads still must for coherency.
+  val lfbReadSafeBusySignal = pipelineBusySignal || io.fbStatus.colorBusy || io.fbStatus.auxBusy
+
+  val pipelineBusySources = Bits(32 bits)
+  pipelineBusySources := 0
+  pipelineBusySources(0) := triangleSetup.o.valid
+  pipelineBusySources(1) := rasterizer.running
+  pipelineBusySources(2) := tmuInputValid
+  pipelineBusySources(3) := tmuBusy
+  pipelineBusySources(4) := fbAccess.io.busy
+  pipelineBusySources(5) := io.fbStatus.colorBusy
+  pipelineBusySources(6) := io.fbStatus.auxBusy
+  pipelineBusySources(7) := colorCombine.io.input.valid
+  pipelineBusySources(8) := fogBusy
+  pipelineBusySources(9) := fbAccess.io.input.valid
+  pipelineBusySources(10) := writeColor.i.fromPipeline.valid
+  pipelineBusySources(11) := writeAux.i.fromPipeline.valid
+  pipelineBusySources(12) := writeColor.o.fbWrite.valid
+  pipelineBusySources(13) := writeAux.o.fbWrite.valid
+  pipelineBusySources(14) := fastfillWriter.io.running
+  pipelineBusySources(15) := fastfillWriter.io.wordValid
+  pipelineBusySources(16) := fastfillWriter.io.colorWrite.valid
+  pipelineBusySources(17) := fastfillWriter.io.auxWrite.valid
+  pipelineBusySources(18) := preDitherMerged.valid
+  pipelineBusySources(19) := preDitherPiped.valid
+  pipelineBusySources(20) := ditherOutput.valid
+  pipelineBusySources(21) := ditherJoined.valid
+  pipelineBusySources(22) := forColorWrite.valid
+  pipelineBusySources(23) := forAuxWrite.valid
+  pipelineBusySources(24) := colorWriteInput.valid
+  pipelineBusySources(25) := auxWriteInput.valid
+  pipelineBusySources(26) := io.externalBusy.nopCmd
+  pipelineBusySources(27) := io.externalBusy.fastfillCmd
+  pipelineBusySources(28) := io.externalBusy.swapbufferCmd
+  pipelineBusySources(29) := io.externalBusy.swapWaiting
+  pipelineBusySources(30) := lfb.io.busy
+
   io.debug.pipelineBusy := pipelineBusySignal
-  lfb.io.pipelineBusy := pipelineBusySignal
+  io.debug.pipelineBusySources := pipelineBusySources
+  io.debug.fbAccess := fbAccess.io.debug
+  io.debug.fbColorCache := 0
+  io.debug.fbColorCacheReq := 0
+  io.debug.fbColorCacheExpected := 0
+  io.debug.fbColorCacheOccupancy := 0
+  io.debug.fbAuxCache := 0
+  io.debug.fbAuxCacheReq := 0
+  io.debug.fbAuxCacheExpected := 0
+  io.debug.fbAuxCacheOccupancy := 0
+  lfb.io.pipelineBusy := lfbReadSafeBusySignal
 
   io.stats.exposeToSim()
   io.debug.exposeToSim()

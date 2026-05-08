@@ -53,6 +53,12 @@ ifdef CCACHE
 endif
 
 CXXFLAGS = -O3 -DVL_TIME_CONTEXT
+ifneq (,$(findstring --no-tmu,$(CORE_SIM_GEN_ARGS)))
+CXXFLAGS += -DVOODOO_SIM_NO_TMU
+endif
+ifneq (,$(findstring --no-fog,$(CORE_SIM_GEN_ARGS)))
+CXXFLAGS += -DVOODOO_SIM_NO_FOG
+endif
 ifeq ($(TRACE),1)
 CXXFLAGS += -DVM_TRACE_FST
 endif
