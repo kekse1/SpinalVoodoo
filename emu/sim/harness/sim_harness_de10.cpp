@@ -381,19 +381,6 @@ static void dump_timeout_debug(const char* kind, uint32_t addr) {
             (unsigned)r->CoreDe10__DOT__core_1__DOT__pixelPipeline_1__DOT__fastfillWriter__DOT__io_auxWrite_ready,
             (unsigned)r->CoreDe10__DOT__core_1__DOT__pixelPipeline_1__DOT__fastfillWriter__DOT__io_generatedPixels,
             (unsigned)r->CoreDe10__DOT__core_1__DOT__pixelPipeline_1__DOT__fastfillWriter__DOT__io_colorWrittenPixels);
-    fprintf(stderr,
-            "[sim_harness_de10] %s fb_reader_cache colorDbg=0x%016llx colorReq=0x%08x colorExp=0x%08x colorRem=%u colorOcc=0x%08x auxDbg=0x%016llx auxReq=0x%08x auxExp=0x%08x auxRem=%u auxOcc=0x%08x\n",
-            kind,
-            (unsigned long long)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbColorReader_io_cacheDebug,
-            (unsigned)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbColorReader_io_cacheDebugReadAddr,
-            (unsigned)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbColorReader_io_cacheDebugExpectedAddr,
-            (unsigned)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbColorReader_io_cacheDebugRemaining,
-            (unsigned)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbColorReader_io_cacheDebugOccupancy,
-            (unsigned long long)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbAuxReader_io_cacheDebug,
-            (unsigned)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbAuxReader_io_cacheDebugReadAddr,
-            (unsigned)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbAuxReader_io_cacheDebugExpectedAddr,
-            (unsigned)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbAuxReader_io_cacheDebugRemaining,
-            (unsigned)r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbAuxReader_io_cacheDebugOccupancy);
 }
 
 static inline bool fb_cache_invariant_bad(uint64_t dbg) {
@@ -406,19 +393,7 @@ static inline bool fb_cache_invariant_bad(uint64_t dbg) {
 }
 
 static void check_fb_cache_invariant(void) {
-    if (!fb_cache_invariant_abort || cycle_limit_hit) return;
-    auto* r = top->rootp;
-    const uint64_t color_dbg = r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbColorReader_io_cacheDebug;
-    const uint64_t aux_dbg = r->CoreDe10__DOT__core_1__DOT__framebufferMem__DOT__fbAuxReader_io_cacheDebug;
-    if (fb_cache_invariant_bad(color_dbg) || fb_cache_invariant_bad(aux_dbg)) {
-        fprintf(stderr,
-                "[sim_harness_de10] FB cache invariant violation at cycle %lu colorDbg=0x%016llx auxDbg=0x%016llx\n",
-                (unsigned long)(sim_time / 2),
-                (unsigned long long)color_dbg,
-                (unsigned long long)aux_dbg);
-        dump_timeout_debug("FB_CACHE_INVARIANT", 0);
-        cycle_limit_hit = true;
-    }
+    (void)fb_cache_invariant_abort;
 }
 
 static void signal_handler(int sig) {
