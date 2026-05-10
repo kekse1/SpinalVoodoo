@@ -17,6 +17,27 @@ SpinalHDL implementation of the 3dfx Voodoo Graphics GPU.
 
 ## Implementation Status
 
+### SST-1 Performance
+
+| Mode | Shape | Original Voodoo 1 (Ktri/s) | DE10-Nano (Ktri/s) | DE10-Nano / Original Voodoo 1 |
+|---|---:|---:|---:|---:|
+| Flat shaded | 10 px | 1911 | 617.8 | 32.3% |
+| Flat shaded | 25 px | 1096 | 605.2 | 55.2% |
+| Flat shaded | 50 px | 644 | 560.2 | 87.0% |
+| Flat shaded | 1000 px | 42 | 64.0 | 152.4% |
+| Gouraud + fog + alpha + Z | 10 px | 1231 | 253.5 | 20.6% |
+| Gouraud + fog + alpha + Z | 25 px | 968 | 298.5 | 30.8% |
+| Gouraud + fog + alpha + Z | 50 px | 550 | 274.5 | 49.9% |
+| Gouraud + fog + alpha + Z | 1000 px | 37 | 42.2 | 114.1% |
+| Textured + fog | 10 px | 828 | 271.2 | 32.8% |
+| Textured + fog | 25 px | 823 | 274.3 | 33.3% |
+| Textured + fog | 50 px | 655 | 292.8 | 44.7% |
+| Textured + fog | 1000 px | 43 | 50.9 | 118.4% |
+| Textured + fog + alpha + Z | 10 px | 826 | 274.6 | 33.2% |
+| Textured + fog + alpha + Z | 25 px | 807 | 274.2 | 34.0% |
+| Textured + fog + alpha + Z | 50 px | 549 | 274.4 | 50.0% |
+| Textured + fog + alpha + Z | 1000 px | 37 | 40.8 | 110.3% |
+
 ### FBI (Frame Buffer Interface)
 
 - Rasterization
