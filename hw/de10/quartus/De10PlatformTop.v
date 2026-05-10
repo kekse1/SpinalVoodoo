@@ -17,7 +17,20 @@ module De10PlatformTop (
   inout  wire [3:0]  hps_memory_mem_dqs_n,
   output wire        hps_memory_mem_odt,
   output wire [3:0]  hps_memory_mem_dm,
-  input  wire        hps_memory_oct_rzqin
+  input  wire        hps_memory_oct_rzqin,
+  output wire [23:0] HDMI_TX_D,
+  output wire        HDMI_TX_CLK,
+  output wire        HDMI_TX_DE,
+  output wire        HDMI_TX_HS,
+  output wire        HDMI_TX_VS,
+  input  wire        HDMI_TX_INT,
+  output wire        HDMI_I2S0,
+  output wire        HDMI_MCLK,
+  output wire        HDMI_LRCLK,
+  output wire        HDMI_SCLK,
+  output wire [7:0]  LED,
+  inout  wire        I2C_SCL,
+  inout  wire        I2C_SDA
 );
 
   wire        h2f_waitrequest;
@@ -73,7 +86,32 @@ module De10PlatformTop (
   wire [3:0]  tex_byteenable;
 
   wire        core_clk;
+  wire        hdmi_clk;
+  wire        hdmi_pll_locked;
   wire        pll_locked;
+  wire [7:0]  hdmi_rgb_r;
+  wire [7:0]  hdmi_rgb_g;
+  wire [7:0]  hdmi_rgb_b;
+  wire        hdmi_de;
+  wire        hdmi_hs;
+  wire        hdmi_vs;
+  wire [0:0]  hdmi_status_displayed_buffer;
+  wire [25:0] hdmi_status_displayed_base;
+  wire        hdmi_status_swap_pending;
+  wire [1:0]  hdmi_status_swap_count;
+  wire        hdmi_status_new_frame;
+  wire        hdmi_status_active;
+  wire [9:0]  hdmi_status_x;
+  wire [9:0]  hdmi_status_y;
+  wire        hdmi_underflow;
+  wire [12:0] hdmi_fifo_level;
+  wire        hdmi_scl_en;
+  wire        hdmi_sda_en;
+
+  assign HDMI_I2S0 = 1'bz;
+  assign HDMI_MCLK = 1'bz;
+  assign HDMI_LRCLK = 1'bz;
+  assign HDMI_SCLK = 1'bz;
 
   de10_core_pll core_pll_0 (
     .refclk   (clk),
@@ -81,6 +119,59 @@ module De10PlatformTop (
     .outclk_0 (core_clk),
     .locked   (pll_locked)
   );
+
+  de10_hdmi_pll hdmi_pll_0 (
+    .refclk   (clk),
+    .rst      (1'b0),
+    .outclk_0 (hdmi_clk),
+    .locked   (hdmi_pll_locked)
+  );
+
+  altddio_out #(
+    .extend_oe_disable("OFF"),
+    .intended_device_family("Cyclone V"),
+    .invert_output("OFF"),
+    .lpm_hint("UNUSED"),
+    .lpm_type("altddio_out"),
+    .oe_reg("UNREGISTERED"),
+    .power_up_high("OFF"),
+    .width(1)
+  ) hdmi_clock_forward (
+    .datain_h(1'b0),
+    .datain_l(1'b1),
+    .outclock(hdmi_clk),
+    .dataout(HDMI_TX_CLK),
+    .aclr(1'b0),
+    .aset(1'b0),
+    .oe(1'b1),
+    .outclocken(1'b1),
+    .sclr(1'b0),
+    .sset(1'b0)
+  );
+
+  assign HDMI_TX_D = {hdmi_rgb_r, hdmi_rgb_g, hdmi_rgb_b};
+  assign HDMI_TX_DE = hdmi_de;
+  assign HDMI_TX_HS = hdmi_hs;
+  assign HDMI_TX_VS = hdmi_vs;
+
+  assign I2C_SCL = hdmi_scl_en ? 1'b0 : 1'bz;
+  assign I2C_SDA = hdmi_sda_en ? 1'b0 : 1'bz;
+
+  cyclonev_hps_interface_peripheral_i2c hdmi_i2c (
+    .out_clk  (hdmi_scl_en),
+    .scl      (I2C_SCL),
+    .out_data (hdmi_sda_en),
+    .sda      (I2C_SDA)
+  );
+
+  assign LED[0] = pll_locked & hdmi_pll_locked;
+  assign LED[1] = hdmi_status_new_frame;
+  assign LED[2] = hdmi_de;
+  assign LED[3] = hdmi_underflow;
+  assign LED[4] = I2C_SCL;
+  assign LED[5] = I2C_SDA;
+  assign LED[6] = hdmi_fifo_level[11];
+  assign LED[7] = hdmi_status_active;
 
   de10_soc soc_0 (
     .clk_clk                     (core_clk),
@@ -162,7 +253,11 @@ module De10PlatformTop (
   reg pll_locked_sync = 1'b0;
   reg h2f_reset_meta = 1'b0;
   reg h2f_reset_sync = 1'b0;
-  reg [7:0] core_reset_release = 8'h00;
+  // Keep the fabric-side masters idle long enough for Linux fpga-region to
+  // finish re-enabling the HPS/FPGA bridges after configuration.  Without
+  // this, the scanout/core can issue F2SDRAM reads while the bridge is still
+  // disabled, which wedges the HPS on this board/kernel.
+  reg [27:0] core_reset_release = 28'h0000000;
 
   always @(posedge core_clk or negedge pll_locked) begin
     if (!pll_locked) begin
@@ -170,21 +265,21 @@ module De10PlatformTop (
       pll_locked_sync <= 1'b0;
       h2f_reset_meta <= 1'b0;
       h2f_reset_sync <= 1'b0;
-      core_reset_release <= 8'h00;
+      core_reset_release <= 28'h0000000;
     end else begin
       pll_locked_meta <= 1'b1;
       pll_locked_sync <= pll_locked_meta;
       h2f_reset_meta <= h2f_reset_n;
       h2f_reset_sync <= h2f_reset_meta;
       if (!h2f_reset_sync) begin
-        core_reset_release <= 8'h00;
-      end else if (!core_reset_release[7]) begin
+        core_reset_release <= 28'h0000000;
+      end else if (!core_reset_release[27]) begin
         core_reset_release <= core_reset_release + 8'h01;
       end
     end
   end
 
-  assign core_reset = ~pll_locked_sync | ~h2f_reset_sync | ~core_reset_release[7];
+  assign core_reset = ~pll_locked_sync | ~h2f_reset_sync | ~core_reset_release[27];
 
   De10Top core_0 (
     .io_h2fLw_address        (h2f_address[23:2]),
@@ -231,9 +326,25 @@ module De10PlatformTop (
     .io_memTex_writeData     (tex_writedata),
     .io_memTex_readDataValid (tex_readdatavalid),
     .io_memTex_readData      (tex_readdata),
+    .io_hdmi_clock                    (hdmi_clk),
+    .io_hdmi_reset                    (~hdmi_pll_locked),
+    .io_hdmi_video_rgb_r              (hdmi_rgb_r),
+    .io_hdmi_video_rgb_g              (hdmi_rgb_g),
+    .io_hdmi_video_rgb_b              (hdmi_rgb_b),
+    .io_hdmi_video_de                 (hdmi_de),
+    .io_hdmi_video_hSync              (hdmi_hs),
+    .io_hdmi_video_vSync              (hdmi_vs),
+    .io_hdmi_status_displayedBuffer   (hdmi_status_displayed_buffer),
+    .io_hdmi_status_displayedBase     (hdmi_status_displayed_base),
+    .io_hdmi_status_swapPending       (hdmi_status_swap_pending),
+    .io_hdmi_status_swapCount         (hdmi_status_swap_count),
+    .io_hdmi_status_newFrame          (hdmi_status_new_frame),
+    .io_hdmi_status_active            (hdmi_status_active),
+    .io_hdmi_status_x                 (hdmi_status_x),
+    .io_hdmi_status_y                 (hdmi_status_y),
+    .io_hdmi_underflow                (hdmi_underflow),
+    .io_hdmi_fifoLevel                (hdmi_fifo_level),
     .reset                   (core_reset),
     .clk                     (core_clk)
   );
-  assign h2f_burstcount = 1'b1;
-
 endmodule
