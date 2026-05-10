@@ -707,16 +707,6 @@ case class PixelPipeline(c: Config) extends Component {
   pipelineBusySources(30) := lfb.io.busy
 
   io.debug.pipelineBusy := pipelineBusySignal
-  io.debug.pipelineBusySources := pipelineBusySources
-  io.debug.fbAccess := fbAccess.io.debug
-  io.debug.fbColorCache := 0
-  io.debug.fbColorCacheReq := 0
-  io.debug.fbColorCacheExpected := 0
-  io.debug.fbColorCacheOccupancy := 0
-  io.debug.fbAuxCache := 0
-  io.debug.fbAuxCacheReq := 0
-  io.debug.fbAuxCacheExpected := 0
-  io.debug.fbAuxCacheOccupancy := 0
   lfb.io.pipelineBusy := lfbReadSafeBusySignal
 
   io.stats.exposeToSim()
