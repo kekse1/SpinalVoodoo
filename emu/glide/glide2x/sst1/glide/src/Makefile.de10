@@ -81,6 +81,7 @@ INIT_OBJECTS = \
 	../../init/vgdrvr.o \
 	../../init/initvg/gamma.o \
 	../../init/initvg/dac.o \
+	../../init/initvg/de10_adv7513.o \
 	../../init/initvg/video.o \
 	../../init/initvg/parse.o \
 	../../init/initvg/sli.o \

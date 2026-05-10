@@ -24,6 +24,9 @@
 #ifdef _MSC_VER
 #pragma optimize ("",off)
 #endif
+#ifdef DE10_BACKEND
+#include "de10_adv7513.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -48,7 +51,8 @@ FX_EXPORT FxBool FX_CSTYLE sst1InitVideo(FxU32 *sstbase,
   sst1VideoTimingStruct *altVideoTiming)
 {
 #if defined(SIM_BACKEND) || defined(DE10_BACKEND)
-    /* In simulation / DE10 headless mode, skip DAC-driven video init.
+    /* In simulation, skip DAC-driven video init. On DE10, the ADV7513
+     * transmitter is the DAC-equivalent board output and is initialized here.
      * Set resolution info that Glide needs, then return success.
      */
     volatile Sstregs *sst = (Sstregs *) sstbase;
@@ -78,10 +82,20 @@ FX_EXPORT FxBool FX_CSTYLE sst1InitVideo(FxU32 *sstbase,
     sst1CurrentBoard->memFifoStatusLwm = 0x1f;
     sst1CurrentBoard->fbiMemoryFifoEn = 1;
 
-    /* Set up basic rendering state */
+    /* Set up basic rendering state for simulation. DE10 uses the FPGA HDMI
+     * scanout path and does not need the legacy SST video read-modify-write
+     * sequence here; that sequence can touch unsupported/reset-sensitive
+     * legacy video bits before Glide has opened the board. */
+#ifndef DE10_BACKEND
     ISET(sst->fbiInit1, IGET(sst->fbiInit1) & ~SST_VIDEO_RESET);
     ISET(sst->fbiInit2, (IGET(sst->fbiInit2) & ~SST_SWAP_ALGORITHM) | SST_SWAP_VSYNC);
     sst1InitIdleFBINoNOP(sstbase);
+#endif
+
+#ifdef DE10_BACKEND
+    if (!de10Adv7513InitOnce())
+        return(FXFALSE);
+#endif
 
     INIT_PRINTF(("sst1InitVideo(): backend video init stubbed (%dx%d)\n",
         sst1CurrentBoard->fbiVideoWidth, sst1CurrentBoard->fbiVideoHeight));

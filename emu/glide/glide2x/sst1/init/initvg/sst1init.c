@@ -162,6 +162,69 @@ static void de10StageFile(const char *stage) { (void)stage; }
 #endif
 #include "rcver.h"
 
+#ifdef DE10_BACKEND
+static void de10InitStaticBoardInfo(FxU32 *sstbase)
+{
+    const char *envp;
+    FxU32 i;
+
+    if(!sst1CurrentBoard)
+        return;
+
+    /*
+    ** The DE10 backend is a Voodoo1-compatible fabric endpoint, not a real
+    ** PCI SST-1 board.  Avoid the legacy reset/probe sequence and publish the
+    ** known static configuration used by the FPGA memory map.
+    */
+    sst1CurrentBoard->virtAddr = sstbase;
+    sst1CurrentBoard->fbiRevision = 2;
+    sst1CurrentBoard->fbiBoardID = 0;
+    sst1CurrentBoard->fbiConfig = 0;
+    sst1CurrentBoard->fbiMemSize = 4;
+    sst1CurrentBoard->fbiMemSpeed = 50;
+    sst1CurrentBoard->fbiVideo16BPP = 0;
+    sst1CurrentBoard->fbiVideoWidth = 640;
+    sst1CurrentBoard->fbiVideoHeight = 480;
+    sst1CurrentBoard->fbiVideoRefresh = 60;
+    sst1CurrentBoard->fbiMemoryFifoEn = 1;
+    sst1CurrentBoard->fbiDacType = SST_FBI_DACTYPE_ICS;
+    sst1CurrentBoard->fbiRegulatorPresent = 0;
+    sst1CurrentBoard->fbiTripleBufferingEnabled = FXFALSE;
+
+    sst1CurrentBoard->sstSliDetect = 0;
+    sst1CurrentBoard->numberTmus = 1;
+    sst1CurrentBoard->tmuRevision = 1;
+    sst1CurrentBoard->tmuConfig = 1;
+    sst1CurrentBoard->tmuMemSpeed = 50;
+    sst1CurrentBoard->tmuClkFixed = 0;
+
+    sst1CurrentBoard->tmuMemSize[0] = 8;
+    sst1CurrentBoard->tmuMemSize[1] = 0;
+    sst1CurrentBoard->tmuMemSize[2] = 0;
+    sst1CurrentBoard->tmuInit0[0] = SST_TREX0INIT0_DEFAULT;
+    sst1CurrentBoard->tmuInit1[0] = SST_TREX0INIT1_DEFAULT;
+    sst1CurrentBoard->tmuInit0[1] = SST_TREX1INIT0_DEFAULT;
+    sst1CurrentBoard->tmuInit1[1] = SST_TREX1INIT1_DEFAULT;
+    sst1CurrentBoard->tmuInit0[2] = SST_TREX2INIT0_DEFAULT;
+    sst1CurrentBoard->tmuInit1[2] = SST_TREX2INIT1_DEFAULT;
+
+    sst1CurrentBoard->initGrxClkDone = 1;
+    sst1CurrentBoard->vgaPassthruDisable = SST_EN_VGA_PASSTHRU;
+    sst1CurrentBoard->vgaPassthruEnable = 0;
+    sst1CurrentBoard->memFifoStatusLwm = 0x1f;
+    sst1CurrentBoard->grxClkFreq = 50;
+
+    envp = GETENV(("SST_FBIMEM_SIZE"));
+    if(envp && (SSCANF(envp, "%i", &i) == 1))
+        sst1CurrentBoard->fbiMemSize = i;
+
+    envp = GETENV(("SST_TMUMEM_SIZE"));
+    if(envp && (SSCANF(envp, "%i", &i) == 1))
+        sst1CurrentBoard->tmuMemSize[0] = i;
+
+}
+#endif
+
 #ifdef __WIN32__
 #include <windows.h>
 #endif
@@ -341,6 +404,13 @@ FX_EXPORT FxBool FX_CSTYLE sst1InitRegisters(FxU32 *sstbase)
     de10StageFile("sst1InitRegisters: enter");
     if(sst1InitCheckBoard(sstbase) == FXFALSE)
         return(FXFALSE);
+
+#ifdef DE10_BACKEND
+    de10StageFile("sst1InitRegisters: before de10 static device info");
+    de10InitStaticBoardInfo(sstbase);
+    de10StageFile("sst1InitRegisters: after de10 static device info");
+    return(FXTRUE);
+#endif
 
     if(GETENV(("SST_IGNORE_INIT_REGISTERS"))) {
         INIT_PRINTF(("WARNING: Ignoring sst1InitRegisters()...\n"));
