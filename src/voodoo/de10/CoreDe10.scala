@@ -29,15 +29,22 @@ case class H2fLwMmio(addressWidth: Int) extends Bundle with IMasterSlave {
   }
 }
 
-case class H2fLwToBmbBridge(addressWidth: Int, bmbParams: BmbParameter) extends Component {
+case class H2fLwToBmbBridge(
+    addressWidth: Int,
+    bmbParams: BmbParameter,
+    timeoutLog2: Int = 20
+) extends Component {
   val io = new Bundle {
     val h2fLw = slave(H2fLwMmio(addressWidth - 2))
     val cpuBus = master(Bmb(bmbParams))
   }
 
-  private val stallLimitLog2 = 20
-  private val stalledWriteLimit = 1 << stallLimitLog2
+  private val timeoutLimit = 1 << timeoutLog2
   private val wedgedStatusAddr = U(0x254, addressWidth bits)
+  private val debugLiveAddr = U(0x258, addressWidth bits)
+  private val debugCapturedAddressAddr = U(0x25c, addressWidth bits)
+  private val debugCapturedDataAddr = U(0x260, addressWidth bits)
+  private val debugCapturedMetaAddr = U(0x264, addressWidth bits)
 
   val cmdAddress = (io.h2fLw.address.resize(addressWidth) |<< 2)
   val writeReq = io.h2fLw.write
@@ -46,6 +53,12 @@ case class H2fLwToBmbBridge(addressWidth: Int, bmbParams: BmbParameter) extends 
   val selectedReadReq = !writeReq && readReq
   val hasReq = writeReq || readReq
   val statusReadReq = selectedReadReq && cmdAddress === wedgedStatusAddr
+  val debugLiveReadReq = selectedReadReq && cmdAddress === debugLiveAddr
+  val debugCapturedAddressReadReq = selectedReadReq && cmdAddress === debugCapturedAddressAddr
+  val debugCapturedDataReadReq = selectedReadReq && cmdAddress === debugCapturedDataAddr
+  val debugCapturedMetaReadReq = selectedReadReq && cmdAddress === debugCapturedMetaAddr
+  val debugReadReq = statusReadReq || debugLiveReadReq || debugCapturedAddressReadReq ||
+    debugCapturedDataReadReq || debugCapturedMetaReadReq
 
   io.cpuBus.cmd.last := True
   io.cpuBus.cmd.source := 0
@@ -54,58 +67,184 @@ case class H2fLwToBmbBridge(addressWidth: Int, bmbParams: BmbParameter) extends 
   io.cpuBus.cmd.length := 3
   io.cpuBus.cmd.data := io.h2fLw.writedata
   io.cpuBus.cmd.mask := io.h2fLw.byteenable
-  io.cpuBus.rsp.ready := True
-
   val cmdInFlight = RegInit(False)
   val readRspPending = RegInit(False)
   val readData = Reg(Bits(32 bits)) init (0)
   val readDataValid = RegInit(False)
   val readDataPending = RegInit(False)
   val wedged = RegInit(False)
-  val stalledWriteCycles = Reg(UInt((stallLimitLog2 + 1) bits)) init (0)
-  val wedgedWriteStallCycles = Reg(UInt((stallLimitLog2 + 1) bits)) init (0)
+  val requestStallCycles = Reg(UInt((timeoutLog2 + 1) bits)) init (0)
+  val responseStallCycles = Reg(UInt((timeoutLog2 + 1) bits)) init (0)
+  val wedgedWriteStallCycles = Reg(UInt((timeoutLog2 + 1) bits)) init (0)
   val droppedWrites = Reg(UInt(8 bits)) init (0)
-
-  val statusReadData = B(32 bits, default -> False)
-  statusReadData(0) := wedged
-  statusReadData(8, 8 bits) := droppedWrites.asBits
-  statusReadData(16, 16 bits) := wedgedWriteStallCycles(15 downto 0).asBits
+  val requestTimeoutSeen = RegInit(False)
+  val responseTimeoutSeen = RegInit(False)
+  val capturedValid = RegInit(False)
+  val capturedAddress = Reg(UInt(addressWidth bits)) init (0)
+  val capturedData = Reg(Bits(32 bits)) init (0)
+  val capturedMeta = Reg(Bits(32 bits)) init (0)
 
   val cmdBlocked = cmdInFlight || readRspPending || readDataPending || readDataValid
-  val dropWriteReq = writeReq && wedged
-  val locallyHandledReq = statusReadReq || dropWriteReq
+  val wedgedReadReq = selectedReadReq && wedged && !debugReadReq
+  val localReadReq = debugReadReq || wedgedReadReq
+  val localWriteReq = writeReq && wedged
+  val locallyHandledReq = localReadReq || localWriteReq
+  val readResponseSlotAvailable = !readDataPending && !readDataValid
+  val localReadAccept = localReadReq && readResponseSlotAvailable
+  val localWriteAccept = localWriteReq && !illegalReq
+  val localAccept = hasReq && !illegalReq && (localReadAccept || localWriteAccept)
   val canIssueReq = hasReq && !illegalReq && !cmdBlocked && !locallyHandledReq
   val acceptWindow = canIssueReq && io.cpuBus.cmd.ready
-  val localAccept = hasReq && !illegalReq && !cmdBlocked && locallyHandledReq
-  val rspCompletesCurrent = io.cpuBus.rsp.valid && (cmdInFlight || acceptWindow)
-  val rspIsRead = (cmdInFlight && readRspPending) || acceptWindow && selectedReadReq
-  val stalledWrite =
-    writeReq && !illegalReq && !wedged && !localAccept && (cmdBlocked || !io.cpuBus.cmd.ready)
-  val stallWouldTimeout = stalledWrite && stalledWriteCycles === U(
-    stalledWriteLimit - 1,
-    stalledWriteCycles.getWidth bits
+  val requestStalled =
+    hasReq && !illegalReq && !locallyHandledReq && !acceptWindow && (cmdBlocked || !io.cpuBus.cmd.ready)
+  val requestStallLimitReached = requestStalled && requestStallCycles === U(
+    timeoutLimit - 1,
+    requestStallCycles.getWidth bits
   )
+  val requestTimeoutAccept = requestStallLimitReached && (writeReq || readResponseSlotAvailable)
+  val requestTimeoutRead = requestTimeoutAccept && selectedReadReq
+  val requestTimeoutWrite = requestTimeoutAccept && writeReq
+  val localOrRequestTimeoutRead = localReadAccept || requestTimeoutRead
 
-  io.h2fLw.waitrequest := hasReq && !(localAccept || stallWouldTimeout) && (illegalReq || cmdBlocked || !io.cpuBus.cmd.ready)
+  io.cpuBus.rsp.ready := readResponseSlotAvailable && !localOrRequestTimeoutRead
+  val rspFire = io.cpuBus.rsp.valid && io.cpuBus.rsp.ready
+  val cpuCmdFire = io.cpuBus.cmd.valid && io.cpuBus.cmd.ready
+  val rspCompletesCurrent = rspFire && (cmdInFlight || acceptWindow)
+  val rspIsRead = (cmdInFlight && readRspPending) || acceptWindow && selectedReadReq
+  val responseStallLimitReached = cmdInFlight && !rspFire && responseStallCycles === U(
+    timeoutLimit - 1,
+    responseStallCycles.getWidth bits
+  )
+  val responseTimeoutRead =
+    responseStallLimitReached && readRspPending && readResponseSlotAvailable && !localOrRequestTimeoutRead
+  val responseTimeoutWrite = responseStallLimitReached && !readRspPending
+  val responseTimeout = responseTimeoutRead || responseTimeoutWrite
+  val wedgeNow = requestTimeoutAccept || responseTimeout
+
+  val statusReadData = B(32 bits, default -> False)
+  statusReadData(0) := wedged || wedgeNow
+  statusReadData(1) := requestTimeoutSeen || requestTimeoutAccept
+  statusReadData(2) := responseTimeoutSeen || responseTimeout
+  statusReadData(4) := cmdInFlight
+  statusReadData(5) := readRspPending
+  statusReadData(8, 8 bits) := droppedWrites.asBits
+  statusReadData(16, 16 bits) := wedgedWriteStallCycles.resize(16 bits).asBits
+
+  val debugLiveData = B(32 bits, default -> False)
+  debugLiveData(0) := hasReq
+  debugLiveData(1) := writeReq
+  debugLiveData(2) := readReq
+  debugLiveData(3) := illegalReq
+  debugLiveData(4) := debugReadReq
+  debugLiveData(5) := localWriteReq
+  debugLiveData(6) := localAccept
+  debugLiveData(7) := acceptWindow
+  debugLiveData(8) := io.cpuBus.cmd.valid
+  debugLiveData(9) := io.cpuBus.cmd.ready
+  debugLiveData(10) := cpuCmdFire
+  debugLiveData(11) := io.cpuBus.rsp.valid
+  debugLiveData(12) := io.cpuBus.rsp.ready
+  debugLiveData(13) := rspFire
+  debugLiveData(14) := cmdBlocked
+  debugLiveData(15) := cmdInFlight
+  debugLiveData(16) := readRspPending
+  debugLiveData(17) := readDataPending
+  debugLiveData(18) := readDataValid
+  debugLiveData(19) := requestStalled
+  debugLiveData(20) := requestTimeoutAccept
+  debugLiveData(21) := responseTimeout
+  debugLiveData(22) := wedged
+  debugLiveData(23) := wedgeNow
+  debugLiveData(24) := readResponseSlotAvailable
+  debugLiveData(25) := locallyHandledReq
+  debugLiveData(26) := canIssueReq
+  debugLiveData(27) := localReadAccept
+  debugLiveData(28) := localWriteAccept
+  debugLiveData(29) := rspCompletesCurrent
+  debugLiveData(30) := selectedReadReq
+  debugLiveData(31) := capturedValid
+
+  val capturedAddressData = B(32 bits, default -> False)
+  capturedAddressData(addressWidth - 1 downto 0) := capturedAddress.asBits
+
+  val localReadData = B(32 bits, default -> False)
+  when(statusReadReq) {
+    localReadData := statusReadData
+  }
+  when(debugLiveReadReq) {
+    localReadData := debugLiveData
+  }
+  when(debugCapturedAddressReadReq) {
+    localReadData := capturedAddressData
+  }
+  when(debugCapturedDataReadReq) {
+    localReadData := capturedData
+  }
+  when(debugCapturedMetaReadReq) {
+    localReadData := capturedMeta
+  }
+
+  io.h2fLw.waitrequest := hasReq && !(localAccept || requestTimeoutAccept || acceptWindow)
   io.h2fLw.readdata := readData
   io.h2fLw.readdatavalid := readDataValid
 
   readDataValid := False
 
-  when(stalledWrite) {
-    when(!stallWouldTimeout) {
-      stalledWriteCycles := stalledWriteCycles + 1
+  when(requestStalled) {
+    when(requestTimeoutAccept) {
+      requestStallCycles := 0
+    } elsewhen (requestStallCycles =/= U(timeoutLimit - 1, requestStallCycles.getWidth bits)) {
+      requestStallCycles := requestStallCycles + 1
     }
   } otherwise {
-    stalledWriteCycles := 0
+    requestStallCycles := 0
   }
 
-  when(stallWouldTimeout) {
-    wedged := True
-    wedgedWriteStallCycles := U(stalledWriteLimit, wedgedWriteStallCycles.getWidth bits)
-    when(droppedWrites =/= droppedWrites.maxValue) {
-      droppedWrites := droppedWrites + 1
+  when(cmdInFlight && !rspFire) {
+    when(responseTimeout) {
+      responseStallCycles := 0
+    } elsewhen (responseStallCycles =/= U(timeoutLimit - 1, responseStallCycles.getWidth bits)) {
+      responseStallCycles := responseStallCycles + 1
     }
+  } otherwise {
+    responseStallCycles := 0
+  }
+
+  when(requestTimeoutAccept) {
+    requestTimeoutSeen := True
+  }
+
+  when(responseTimeout) {
+    responseTimeoutSeen := True
+  }
+
+  val captureNow = hasReq && !illegalReq && !debugReadReq &&
+    (requestStalled || acceptWindow || localWriteAccept || requestTimeoutAccept)
+  val captureMetaNow = B(32 bits, default -> False)
+  captureMetaNow(0) := True
+  captureMetaNow(1) := writeReq
+  captureMetaNow(2) := selectedReadReq
+  captureMetaNow(3) := requestStalled
+  captureMetaNow(4) := acceptWindow
+  captureMetaNow(5) := requestTimeoutAccept
+  captureMetaNow(6) := responseTimeout
+  captureMetaNow(7) := localWriteAccept
+  captureMetaNow(8) := io.cpuBus.cmd.ready
+  captureMetaNow(9) := cmdBlocked
+  captureMetaNow(10) := wedged
+  captureMetaNow(12, 4 bits) := io.h2fLw.byteenable
+  captureMetaNow(16, 16 bits) := requestStallCycles.resize(16 bits).asBits
+
+  when(captureNow) {
+    capturedValid := True
+    capturedAddress := cmdAddress
+    capturedData := io.h2fLw.writedata
+    capturedMeta := captureMetaNow
+  }
+
+  when(wedgeNow) {
+    wedged := True
+    wedgedWriteStallCycles := U(timeoutLimit, wedgedWriteStallCycles.getWidth bits)
   }
 
   io.cpuBus.cmd.valid := canIssueReq
@@ -115,12 +254,12 @@ case class H2fLwToBmbBridge(addressWidth: Int, bmbParams: BmbParameter) extends 
     io.cpuBus.cmd.opcode := Bmb.Cmd.Opcode.READ
   }
 
-  when(localAccept && statusReadReq) {
-    readData := statusReadData
+  when(localReadAccept) {
+    readData := localReadData
     readDataPending := True
   }
 
-  when(localAccept && dropWriteReq) {
+  when(localWriteAccept || requestTimeoutWrite) {
     when(droppedWrites =/= droppedWrites.maxValue) {
       droppedWrites := droppedWrites + 1
     }
@@ -137,6 +276,16 @@ case class H2fLwToBmbBridge(addressWidth: Int, bmbParams: BmbParameter) extends 
       readData := io.cpuBus.rsp.data
       readDataPending := True
     }
+    readRspPending := False
+  }
+
+  when(requestTimeoutRead || responseTimeoutRead) {
+    readData := B(32 bits, default -> False)
+    readDataPending := True
+  }
+
+  when(responseTimeout) {
+    cmdInFlight := False
     readRspPending := False
   }
 
@@ -166,26 +315,32 @@ case class H2fLwToBmbBridge(addressWidth: Int, bmbParams: BmbParameter) extends 
       assert(!io.cpuBus.cmd.valid)
     }
 
-    when(cmdBlocked && hasReq && !locallyHandledReq && !stallWouldTimeout) {
+    when(cmdBlocked && hasReq && !locallyHandledReq && !requestTimeoutAccept) {
       assert(io.h2fLw.waitrequest)
     }
 
-    when(canIssueReq && !io.cpuBus.cmd.ready && !stallWouldTimeout) {
+    when(canIssueReq && !io.cpuBus.cmd.ready && !requestTimeoutAccept) {
       assert(io.h2fLw.waitrequest)
       assert(io.cpuBus.cmd.valid)
     }
 
-    when(localAccept && statusReadReq) {
+    when(localReadAccept) {
       assert(!io.h2fLw.waitrequest)
       assert(!io.cpuBus.cmd.valid)
     }
 
-    when(localAccept && dropWriteReq) {
+    when(localWriteAccept) {
       assert(!io.h2fLw.waitrequest)
       assert(!io.cpuBus.cmd.valid)
     }
 
-    when(acceptWindow && selectedReadReq && io.cpuBus.rsp.valid) {
+    when(requestTimeoutAccept) {
+      assert(!io.h2fLw.waitrequest)
+      assert(!io.cpuBus.cmd.fire)
+      assert(wedgeNow)
+    }
+
+    when(acceptWindow && selectedReadReq && rspFire) {
       assert(!cmdInFlight)
       assert(!readRspPending)
     }
@@ -202,7 +357,9 @@ case class H2fLwToBmbBridge(addressWidth: Int, bmbParams: BmbParameter) extends 
 
     cover(io.cpuBus.cmd.fire && io.cpuBus.cmd.opcode === Bmb.Cmd.Opcode.WRITE)
     cover(io.cpuBus.cmd.fire && io.cpuBus.cmd.opcode === Bmb.Cmd.Opcode.READ)
-    cover(acceptWindow && io.cpuBus.rsp.valid && selectedReadReq)
+    cover(acceptWindow && rspFire && selectedReadReq)
+    cover(requestTimeoutAccept)
+    cover(responseTimeout)
   }
 }
 

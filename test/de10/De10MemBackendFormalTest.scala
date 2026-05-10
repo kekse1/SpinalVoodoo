@@ -10,7 +10,7 @@ import spinal.lib.formal._
 import voodoo.{Config, TraceConfig}
 
 class H2fLwToBmbBridgeFormalDut(formalStrong: Boolean) extends Component {
-  val dut = H2fLwToBmbBridge(24, voodoo.Core.cpuBmbParams)
+  val dut = H2fLwToBmbBridge(24, voodoo.Core.cpuBmbParams, timeoutLog2 = 3)
   val reset = ClockDomain.current.isResetActive
   val pastValid = RegNext(True) init False
 
@@ -55,13 +55,16 @@ class H2fLwToBmbBridgeFormalDut(formalStrong: Boolean) extends Component {
   when(reset) {
     pendingCmd := False
   } otherwise {
-    when(cmdAccepted && !dut.io.cpuBus.rsp.valid) {
-      pendingCmd := True
-    }
+    val rspAccepted = dut.io.cpuBus.rsp.valid && dut.io.cpuBus.rsp.ready
     when(dut.io.cpuBus.rsp.valid) {
       assume(pendingCmd || cmdAccepted)
       assume(dut.io.cpuBus.rsp.last)
       assume(dut.io.cpuBus.rsp.source === 0)
+    }
+    when(cmdAccepted && !rspAccepted) {
+      pendingCmd := True
+    }
+    when(rspAccepted) {
       pendingCmd := False
     }
   }
