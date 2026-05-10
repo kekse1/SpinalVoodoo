@@ -10,6 +10,7 @@ import voodoo.core.{
   PixelPipeline,
   TextureMemSubsystem
 }
+import voodoo.hdmi.{HdmiCdcFramebufferScanout, HdmiScanoutPort}
 import voodoo.texture.TextureMem
 
 object Core {
@@ -27,7 +28,7 @@ object Core {
   def fbMemBmbParams(c: Config) = BmbParameter(
     addressWidth = c.addressWidth.value,
     dataWidth = 32,
-    sourceWidth = 1 + log2Up(5), // 5 arbiter inputs
+    sourceWidth = 1 + log2Up(5), // Room for framebuffer readers/writers plus scanout routing
     contextWidth = 0,
     lengthWidth = c.memBurstLengthWidth,
     canRead = true,
@@ -91,6 +92,9 @@ case class Core(c: Config) extends Component {
     // Simulation-only framebuffer cache flush request
     val flushFbCaches = in Bool ()
 
+    // Integrated scanout path. Board wrappers provide the physical HDMI transmitter/clocking.
+    val hdmi = master(HdmiScanoutPort(c))
+
   }
   val addressRemapper =
     AddressRemapper(RegisterBank.externalBmbParams(c), RegisterBank.bmbParams(c))
@@ -106,6 +110,7 @@ case class Core(c: Config) extends Component {
   val pixelPipeline = PixelPipeline(c)
   val framebufferMem = FramebufferMemSubsystem(c)
   val textureMem = TextureMemSubsystem(c)
+  val hdmiScanout = HdmiCdcFramebufferScanout(c)
 
   val controlPlane = new Area {
     val swapBuffer = SwapBuffer()
@@ -137,6 +142,15 @@ case class Core(c: Config) extends Component {
     io.swapDisplayedBuffer := framebufferLayout.displayedBuffer
     io.swapsPending := framebufferLayout.swapsPending
 
+    hdmiScanout.io.regs.frontBase := framebufferLayout.front
+    hdmiScanout.io.regs.backBase := framebufferLayout.back
+    hdmiScanout.io.regs.pixelStride := framebufferLayout.draw.pixelStride
+    hdmiScanout.io.regs.displayWidth := 640
+    hdmiScanout.io.regs.displayHeight := 480
+    hdmiScanout.io.regs.framebufferEnable := True
+    hdmiScanout.io.regs.testPatternEnable := False
+    hdmiScanout.io.regs.gammaLut := regBank.io.gammaLut
+
     pixelPipeline.io.controls := PixelPipeline.Controls.fromRegisterBank(
       c,
       regBank,
@@ -159,6 +173,9 @@ case class Core(c: Config) extends Component {
   framebufferMem.io.auxWrite << pixelPipeline.io.auxWrite
   framebufferMem.io.colorReadReq << pixelPipeline.io.colorReadReq
   pixelPipeline.io.colorReadRsp << framebufferMem.io.colorReadRsp
+  framebufferMem.io.scanoutPrefetchReq << hdmiScanout.io.prefetchReq
+  framebufferMem.io.scanoutReadReq << hdmiScanout.io.readReq
+  hdmiScanout.io.readRsp << framebufferMem.io.scanoutReadRsp
   framebufferMem.io.auxReadReq << pixelPipeline.io.auxReadReq
   pixelPipeline.io.auxReadRsp << framebufferMem.io.auxReadRsp
   framebufferMem.io.prefetchColor <> pixelPipeline.io.prefetchColor
@@ -174,6 +191,13 @@ case class Core(c: Config) extends Component {
   textureMem.io.cpuTexDrain << pciFifo.io.texDrain
   textureMem.io.tmuTexRead <> pixelPipeline.io.texRead
   textureMem.io.texMem <> io.texMem
+
+  io.hdmi.video := hdmiScanout.io.video
+  io.hdmi.status := hdmiScanout.io.status
+  io.hdmi.underflow := hdmiScanout.io.underflow
+  io.hdmi.fifoLevel := hdmiScanout.io.fifoPushOccupancy.resized
+  hdmiScanout.io.hdmiClock := io.hdmi.clock
+  hdmiScanout.io.hdmiReset := io.hdmi.reset
 
   regBank.io.statistics := pixelPipeline.io.stats
   regBank.io.debug := pixelPipeline.io.debug

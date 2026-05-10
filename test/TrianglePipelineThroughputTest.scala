@@ -102,8 +102,8 @@ private object TrianglePipelineThroughputTest {
     triangleConfig.alphaMode.aDstFact := 5
     triangleConfig.alphaMode.alphaRef := 0
 
-    val textureMode = Bits(32 bits)
-    textureMode := B(Tmu.TextureFormat.RGB565 << 8, 32 bits)
+    val textureMode = Bits(12 bits)
+    textureMode := B(Tmu.TextureFormat.RGB565 << 8, 12 bits)
     when(!io.pointSample) {
       textureMode(6) := True
       textureMode(7) := True
@@ -227,6 +227,12 @@ private object TrianglePipelineThroughputTest {
     framebuffer.io.prefetchColor <> pipeline.io.prefetchColor
     framebuffer.io.prefetchAux <> pipeline.io.prefetchAux
     framebuffer.io.lfbReadBus <> pipeline.io.lfbReadBus
+    framebuffer.io.scanoutPrefetchReq.valid := False
+    framebuffer.io.scanoutPrefetchReq.payload.startAddress := 0
+    framebuffer.io.scanoutPrefetchReq.payload.endAddress := 0
+    framebuffer.io.scanoutReadReq.valid := False
+    framebuffer.io.scanoutReadReq.payload.address := 0
+    framebuffer.io.scanoutReadRsp.ready := True
     framebuffer.io.flush := False
 
     io.fbMemWrite <> framebuffer.io.fbMemWrite

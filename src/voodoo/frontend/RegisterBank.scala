@@ -65,6 +65,7 @@ case class RegisterBank(config: Config) extends Component {
     val floatShadow = in(Flow(FloatShadowWrite(RegisterBank.bmbParams(config).access.addressWidth)))
     val drawRouting = in(FbRouting(config))
     val paletteWrite = master(Flow(RegisterBank.PaletteWrite()))
+    val gammaLut = out Vec (Bits(24 bits), 33)
   }
 
   io.paletteWrite.valid := False
@@ -85,6 +86,14 @@ case class RegisterBank(config: Config) extends Component {
   private val triangleDrawTraceId = if (config.trace.enabled) Reg(UInt(32 bits)) init (0) else null
   private val trianglePrimitiveTraceId =
     if (config.trace.enabled) Reg(UInt(32 bits)) init (0) else null
+
+  private val gammaLut = Vec(Reg(Bits(24 bits)), 33)
+  for (i <- 0 until 32) {
+    val value = i * 8
+    gammaLut(i) init B((value << 16) | (value << 8) | value, 24 bits)
+  }
+  gammaLut(32) init B(0xffffff, 24 bits)
+  io.gammaLut := gammaLut
 
   private val floatShadowStartS = Reg(SInt(texCoordsHiWidth bits)) init (0)
   private val floatShadowStartT = Reg(SInt(texCoordsHiWidth bits)) init (0)
@@ -119,6 +128,13 @@ case class RegisterBank(config: Config) extends Component {
   when(io.floatShadow.valid) {
     setFloatShadowRaw(io.floatShadow.address, io.floatShadow.raw)
   }.elsewhen(io.bus.cmd.fire && io.bus.cmd.opcode === Bmb.Cmd.Opcode.WRITE) {
+    when(io.bus.cmd.address === U(0x228, 12 bits)) {
+      val clutIndex = io.bus.cmd.data(29 downto 24).asUInt
+      when(clutIndex <= 32) {
+        gammaLut(clutIndex.resized) := io.bus.cmd.data(23 downto 0)
+      }
+    }
+
     val paletteRegHit = io.bus.cmd.address.mux(
       U(0x334, 12 bits) -> True,
       U(0x338, 12 bits) -> True,
@@ -1059,6 +1075,19 @@ case class RegisterBank(config: Config) extends Component {
       vSyncReg.field(UInt(16 bits), AccessType.WO, 0, "Vertical sync start (lines)").asOutput()
     val vSyncOff =
       vSyncReg.fieldAt(16, UInt(16 bits), AccessType.WO, 0, "Vertical sync end (lines)").asOutput()
+
+    // clutData (0x228) - SST-1 DAC/gamma table entry write.
+    // Bits [29:24] select one of the 33 interpolation entries, bits [23:0] are RGB888.
+    val clutData = busif
+      .newRegAtWithCategory(0x228, "clutData", RegisterCategory.bypassFifo)
+      .field(Bits(32 bits), AccessType.WO, 0, "Gamma CLUT entry write")
+      .asOutput()
+
+    // dacData (0x22C) - External DAC register access placeholder. Gamma programming uses clutData.
+    val dacData = busif
+      .newRegAtWithCategory(0x22c, "dacData", RegisterCategory.bypassFifo)
+      .field(Bits(32 bits), AccessType.WO, 0, "DAC register data")
+      .asOutput()
 
     // maxRgbDelta (0x230) - Max RGB difference for video filtering
     val maxRgbDelta = busif

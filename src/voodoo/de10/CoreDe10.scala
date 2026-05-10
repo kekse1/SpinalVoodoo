@@ -6,6 +6,7 @@ import spinal.lib._
 import spinal.lib.bus.avalon._
 import spinal.lib.bus.bmb._
 import voodoo.{Config, Core}
+import voodoo.hdmi.HdmiScanoutPort
 
 /** DE10-oriented wrapper around Core.
   *
@@ -384,6 +385,7 @@ case class CoreDe10(c: Config) extends Component {
       AvalonMM(De10MemBackend.avalonConfig(De10MemBackend.physicalAddressWidth))
     )
     val memTex = master(AvalonMM(De10MemBackend.avalonConfig(De10MemBackend.physicalAddressWidth)))
+    val hdmi = master(HdmiScanoutPort(c))
   }
 
   val core = Core(c)
@@ -408,14 +410,15 @@ case class CoreDe10(c: Config) extends Component {
     io.memTex <> memBackend.io.memTex
   )
 
-  // The DE10 wrapper does not yet model display timing, but swapbufferCMD and
-  // retrace polling need forward progress. Provide a simple periodic retrace pulse
-  // until the real video path drives this input.
-  val vRetraceCounter = Reg(UInt(12 bits)) init (0)
-  vRetraceCounter := vRetraceCounter + 1
-  core.io.statusInputs.vRetrace := vRetraceCounter === 0
+  core.io.statusInputs.vRetrace := core.io.hdmi.status.newFrame
   core.io.statusInputs.memFifoFree := 0xffff
   core.io.statusInputs.pciInterrupt := False
+  core.io.hdmi.clock := io.hdmi.clock
+  core.io.hdmi.reset := io.hdmi.reset
+  io.hdmi.video := core.io.hdmi.video
+  io.hdmi.status := core.io.hdmi.status
+  io.hdmi.underflow := core.io.hdmi.underflow
+  io.hdmi.fifoLevel := core.io.hdmi.fifoLevel
 
   core.io.fbBaseAddr := 0
   core.io.flushFbCaches := False

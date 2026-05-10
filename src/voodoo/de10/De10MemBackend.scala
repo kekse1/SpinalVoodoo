@@ -476,7 +476,7 @@ case class De10MemBackend(c: Config) extends Component {
     val memTex = master(AvalonMM(De10MemBackend.avalonConfig(De10MemBackend.physicalAddressWidth)))
   }
 
-  private def fbBridge() = {
+  private def fbBridge(pipeInput: Boolean = false) = {
     val sourceRemover = BmbSourceRemover(Core.fbMemBmbParams(c))
     val bridge = De10BmbToAvalonMm(
       bmbParams = De10BmbToAvalonMm.singleSourceBridgeParams(Core.fbMemBmbParams(c)),
@@ -484,7 +484,12 @@ case class De10MemBackend(c: Config) extends Component {
       addressBase = De10AddressMap.fbMemBase,
       addressMask = De10AddressMap.fbMemMask
     )
-    sourceRemover.io.output <> bridge.io.bmb
+    if (pipeInput) {
+      bridge.io.bmb.cmd << sourceRemover.io.output.cmd.m2sPipe()
+      sourceRemover.io.output.rsp << bridge.io.bmb.rsp.s2mPipe()
+    } else {
+      sourceRemover.io.output <> bridge.io.bmb
+    }
     (sourceRemover, bridge)
   }
 
@@ -503,8 +508,8 @@ case class De10MemBackend(c: Config) extends Component {
   val (fbWriteSourceRemover, fbWriteBridge) = fbBridge()
   val (fbColorWriteSourceRemover, fbColorWriteBridge) = fbBridge()
   val (fbAuxWriteSourceRemover, fbAuxWriteBridge) = fbBridge()
-  val (fbColorReadSourceRemover, fbColorReadBridge) = fbBridge()
-  val (fbAuxReadSourceRemover, fbAuxReadBridge) = fbBridge()
+  val (fbColorReadSourceRemover, fbColorReadBridge) = fbBridge(pipeInput = true)
+  val (fbAuxReadSourceRemover, fbAuxReadBridge) = fbBridge(pipeInput = true)
   val (texSourceRemover, texBridgeInst) = texBridge()
 
   Seq(

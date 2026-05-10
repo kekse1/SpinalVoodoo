@@ -62,7 +62,7 @@ SpinalHDL implementation of the 3dfx Voodoo Graphics GPU.
 - Alpha Blending
   - [x] Source blend factors (10 modes)
   - [x] Destination blend factors (10 modes)
-  - [x] Framebuffer read for blending (fork-queue-join BMB pattern)
+  - [x] Framebuffer read for blending
 - Chroma Key
   - [x] Color key comparison (post color-combine, matching real hardware)
   - [ ] Chroma range
@@ -145,11 +145,10 @@ SpinalHDL implementation of the 3dfx Voodoo Graphics GPU.
 
 ### Display Controller
 
-- [ ] Video timing generator (hSync, vSync, backPorch, videoDimensions)
-- [ ] Framebuffer scan-out
-- [ ] Gamma correction CLUT (clutData)
-- [ ] DAC programming (dacData)
-- vRetrace is currently an external input (no internal generation)
+- [x] Video timing generator (HDMI/ADV7513 equivalent)
+- [x] Framebuffer scan-out
+- [x] Gamma correction CLUT (clutData)
+- [x] DAC output equivalent via DE10 ADV7513 path
 
 ## Scala CLI Commands
 

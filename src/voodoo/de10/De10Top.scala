@@ -4,6 +4,7 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.avalon._
 import voodoo.{Config, Core}
+import voodoo.hdmi.HdmiScanoutPort
 
 case class De10Top(c: Config) extends Component {
   private val cpuAddressWidth = Core.cpuBmbParams.access.addressWidth
@@ -26,6 +27,7 @@ case class De10Top(c: Config) extends Component {
       AvalonMM(De10MemBackend.avalonConfig(De10MemBackend.physicalAddressWidth))
     )
     val memTex = master(AvalonMM(De10MemBackend.avalonConfig(De10MemBackend.physicalAddressWidth)))
+    val hdmi = master(HdmiScanoutPort(c))
   }
 
   val core = CoreDe10(c)
@@ -39,4 +41,10 @@ case class De10Top(c: Config) extends Component {
     io.memFbAuxRead <> core.io.memFbAuxRead,
     io.memTex <> core.io.memTex
   )
+  core.io.hdmi.clock := io.hdmi.clock
+  core.io.hdmi.reset := io.hdmi.reset
+  io.hdmi.video := core.io.hdmi.video
+  io.hdmi.status := core.io.hdmi.status
+  io.hdmi.underflow := core.io.hdmi.underflow
+  io.hdmi.fifoLevel := core.io.hdmi.fifoLevel
 }
