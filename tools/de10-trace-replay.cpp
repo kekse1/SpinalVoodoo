@@ -120,8 +120,19 @@ public:
   bool invalidateFbCache() override { return true; }
   bool flushFbCache() override { return true; }
   bool setSwapCount(uint32_t count) override {
-    mmioWrite32(mmio_, 0x128, count & 0x3u);
-    return true;
+    const uint32_t target = count & 0x1u;
+    for (unsigned attempt = 0; attempt < 4; ++attempt) {
+      const uint32_t status = mmioRead32(mmio_, 0x000);
+      const uint32_t displayed = (status >> 10) & 0x1u;
+      if (displayed == target) return true;
+
+      // swapbufferCMD is a command register, not a direct swap-count register.
+      // Use a no-vsync swap command to advance the hardware-visible displayed buffer
+      // until it matches the state file's draw/display relationship.
+      mmioWrite32(mmio_, 0x128, 0x0u);
+      idleWait();
+    }
+    return ((mmioRead32(mmio_, 0x000) >> 10) & 0x1u) == target;
   }
 
 private:
