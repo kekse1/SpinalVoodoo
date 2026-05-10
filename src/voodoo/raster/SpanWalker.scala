@@ -17,7 +17,7 @@ case class SpanWalker(c: Config, formalStrong: Boolean = false) extends Componen
 
   object WalkerState extends SpinalEnum {
     val Idle, Decide, RecoverLeft, SearchRightToEnter, SearchLeftToExit, SearchRightToExit,
-        EmitSpan =
+        EmitSpan, AdvanceRow =
       newElement()
   }
 
@@ -27,6 +27,8 @@ case class SpanWalker(c: Config, formalStrong: Boolean = false) extends Componen
   val probe = Reg(SpanWalker.Cursor(c))
   val bookmark = Reg(SpanWalker.Cursor(c))
   val leftEdge = Reg(SpanWalker.Cursor(c))
+  val nextRowBase = Reg(SpanWalker.Cursor(c))
+  val nextRowLeftBiased = Reg(Bool()) init (False)
   val emitRight = Reg(AFix(c.vertexFormat))
   val emitFirstSpan = Reg(Bool()) init (False)
   val firstSpanPending = Reg(Bool()) init (False)
@@ -195,17 +197,10 @@ case class SpanWalker(c: Config, formalStrong: Boolean = false) extends Componen
     )
   }
 
-  val nextRowRequest = Bool()
-  val nextRowLeftBiased = Bool()
-  val nextRowBase = SpanWalker.Cursor(c)
-  nextRowRequest := False
-  nextRowLeftBiased := False
-  nextRowBase := rowGuess
-
   def prepareNextRow(base: SpanWalker.Cursor, leftBiasedGuess: Boolean): Unit = {
-    nextRowRequest := True
     nextRowBase := base
     nextRowLeftBiased := (if (leftBiasedGuess) True else False)
+    state := WalkerState.AdvanceRow
   }
 
   def captureVisibleLeftEdgeFromProbe(): Unit = {
@@ -343,7 +338,7 @@ case class SpanWalker(c: Config, formalStrong: Boolean = false) extends Componen
     prepareNextRow(leftEdge, leftBiasedGuess = true)
   }
 
-  when(nextRowRequest) {
+  when(state === WalkerState.AdvanceRow) {
     val nextY = (nextRowBase.coords(1) + one).fixTo(c.vertexFormat)
     when(nextY >= triangleConst.yrange(1)) {
       state := WalkerState.Idle
