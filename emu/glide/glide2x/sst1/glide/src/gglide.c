@@ -175,6 +175,7 @@
 **
 */
 
+#include <stdlib.h>
 #include <string.h>
 #include <3dfx.h>
 #include <glidesys.h>
@@ -194,6 +195,22 @@
 #include <init.h>
 #endif
 
+#ifdef DE10_BACKEND
+static void de10BootStage(const char *stage) {
+  const char *path = getenv("DE10_INIT_STAGE_FILE");
+  int fd;
+  if (!path || !path[0]) path = "/home/fpga/de10-cross/init.stage";
+  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return;
+  write(fd, stage, strlen(stage));
+  write(fd, "\n", 1);
+  fsync(fd);
+  close(fd);
+}
+#else
+static void de10BootStage(const char *stage) { (void)stage; }
+#endif
+
 
 /*---------------------------------------------------------------------------
 ** grAlphaBlendFunction
@@ -206,7 +223,13 @@ GR_ENTRY(grAlphaBlendFunction, void, ( GrAlphaBlendFnc_t rgb_sf,   GrAlphaBlendF
 {
   FxU32 alphamode;
 
+#ifdef DE10_BACKEND
+  de10BootStage("grAlphaBlendFunction: enter");
+#endif
   GR_BEGIN("grAlphaBlendFunction",85,4);
+#ifdef DE10_BACKEND
+  de10BootStage("grAlphaBlendFunction: after GR_BEGIN");
+#endif
   GDBG_INFO_MORE((gc->myLevel,"(%d,%d,%d,%d)\n",rgb_sf,rgb_df,alpha_sf,alpha_df));
 
   alphamode = gc->state.fbi_config.alphaMode;
@@ -231,9 +254,18 @@ GR_ENTRY(grAlphaBlendFunction, void, ( GrAlphaBlendFnc_t rgb_sf,   GrAlphaBlendF
       ( ( ( FxU32 ) alpha_sf ) << SST_ASRCFACT_SHIFT ) |
         ( ( ( FxU32 ) alpha_df ) << SST_ADSTFACT_SHIFT );
   
+#ifdef DE10_BACKEND
+  de10BootStage("grAlphaBlendFunction: before alphaMode write");
+#endif
   GR_SET( hw->alphaMode, alphamode );
+#ifdef DE10_BACKEND
+  de10BootStage("grAlphaBlendFunction: after alphaMode write");
+#endif
   gc->state.fbi_config.alphaMode = alphamode;
   GR_END();
+#ifdef DE10_BACKEND
+  de10BootStage("grAlphaBlendFunction: exit");
+#endif
 } /* grAlphaBlendFunction */
 
 /*---------------------------------------------------------------------------

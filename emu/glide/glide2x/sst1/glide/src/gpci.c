@@ -473,6 +473,7 @@ _GlideInitEnvironment( void )
             hwDetectP,
             _GlideRoot.hwConfig.num_sst);
     fflush(stderr);
+    de10BootStage("_GlideInitEnvironment: after detect print");
 
     if (!hwDetectP) {
       char s[128];
@@ -491,17 +492,22 @@ _GlideInitEnvironment( void )
   }
 
   /* GMT: this isn't really necessary since GlideRoot is static */
+  de10BootStage("_GlideInitEnvironment: before display board info");
   for (i = 0; i < _GlideRoot.hwConfig.num_sst; i++) {
     _GlideRoot.GCs[i].mm_table.free_mmid = 0;
     displayBoardInfo( i, &_GlideRoot.hwConfig );
   }
+  de10BootStage("_GlideInitEnvironment: after display board info");
 
+  de10BootStage("_GlideInitEnvironment: before mipmap init");
   _grMipMapInit();
+  de10BootStage("_GlideInitEnvironment: after mipmap init");
   fprintf(stderr, "[hostglide] _GlideInitEnvironment after mipmap init\n");
   fflush(stderr);
   _GlideRoot.initialized = FXTRUE; /* save this for the end */
   fprintf(stderr, "[hostglide] _GlideInitEnvironment done\n");
   fflush(stderr);
+  de10BootStage("_GlideInitEnvironment: done");
 
 } /* _GlideInitEnvironment */
 

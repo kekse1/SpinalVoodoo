@@ -63,7 +63,12 @@
 **
 */
 
+#include <stdlib.h>
 #include <string.h>
+#ifdef DE10_BACKEND
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include <3dfx.h>
 #include <glidesys.h>
 
@@ -74,6 +79,22 @@
 
 #if ( GLIDE_PLATFORM & GLIDE_HW_SST96 )
 #include <init.h>
+#endif
+
+#ifdef DE10_BACKEND
+static void de10BootStage(const char *stage) {
+  const char *path = getenv("DE10_INIT_STAGE_FILE");
+  int fd;
+  if (!path || !path[0]) path = "/home/fpga/de10-cross/init.stage";
+  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return;
+  write(fd, stage, strlen(stage));
+  write(fd, "\n", 1);
+  fsync(fd);
+  close(fd);
+}
+#else
+static void de10BootStage(const char *stage) { (void)stage; }
 #endif
 
 #include "rcver.h"
@@ -278,12 +299,16 @@ GR_DIENTRY(grGlideInit, void, ( void ))
   fflush(stderr);
   
   GDBG_INFO((80,"grGlideInit()\n"));
+  de10BootStage("grGlideInit: before _GlideInitEnvironment");
   _GlideInitEnvironment();                      /* the main init code */
+  de10BootStage("grGlideInit: after _GlideInitEnvironment");
   fprintf(stderr, "[hostglide] grGlideInit returned from _GlideInitEnvironment\n");
   fflush(stderr);
   FXUNUSED(*glideIdent);
 
+  de10BootStage("grGlideInit: before grResetTriStats");
   grResetTriStats();
+  de10BootStage("grGlideInit: after grResetTriStats");
   fprintf(stderr, "[hostglide] grGlideInit done\n");
   fflush(stderr);
   GDBG_INFO((281,"grGlideInit --done---------------------------------------\n"));

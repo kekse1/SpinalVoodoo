@@ -217,6 +217,7 @@
 */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <3dfx.h>
 
@@ -236,6 +237,22 @@
 #include <fxdll.h>
 #include <glide.h>
 #include "fxglide.h"
+
+#ifdef DE10_BACKEND
+static void de10BootStage(const char *stage) {
+  const char *path = getenv("DE10_INIT_STAGE_FILE");
+  int fd;
+  if (!path || !path[0]) path = "/home/fpga/de10-cross/init.stage";
+  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return;
+  write(fd, stage, strlen(stage));
+  write(fd, "\n", 1);
+  fsync(fd);
+  close(fd);
+}
+#else
+static void de10BootStage(const char *stage) { (void)stage; }
+#endif
 
 
 #if (GLIDE_PLATFORM & GLIDE_OS_WIN32)
@@ -567,6 +584,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   FxU32 tvVidtiming_refreshRate = refresh;
 #endif /* (GLIDE_PLATFORM & GLIDE_OS_WIN32) */
 
+  de10BootStage("grSstWinOpen: enter");
   GR_BEGIN_NOFIFOCHECK("grSstWinOpen",80);
   GDBG_INFO_MORE((gc->myLevel,
                   "(rez=%d,ref=%d,cformat=%d,origin=%s,#bufs=%d, #abufs=%d)\n",
@@ -583,6 +601,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
           nColBuffers,
           nAuxBuffers);
   fflush(stderr);
+  de10BootStage("grSstWinOpen: after entry print");
   GR_CHECK_F("grSstWinOpen", !gc, "no SST selected as current (gc==NULL)");
 
 #if (GLIDE_PLATFORM & GLIDE_HW_SST1)
@@ -758,6 +777,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   GDBG_INFO((gc->myLevel, "  Video Init\n" ));
 #ifdef DE10_BACKEND
   fprintf(stderr, "[de10] grSstWinOpen: video init start\n");
+  de10BootStage("grSstWinOpen: video init start");
 #endif
 #if (GLIDE_PLATFORM & GLIDE_OS_WIN32)
   if (oemvidtiming)
@@ -777,6 +797,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
              xres, yres ));
 #ifdef DE10_BACKEND
   fprintf(stderr, "[de10] grSstWinOpen: video init done\n");
+  de10BootStage("grSstWinOpen: video init done");
 #endif
 
 #if (GLIDE_PLATFORM & GLIDE_OS_WIN32)
@@ -793,6 +814,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   GDBG_INFO((gc->myLevel, "  Command Transport Init\n" ));
 #ifdef DE10_BACKEND
   fprintf(stderr, "[de10] grSstWinOpen: transport init start\n");
+  de10BootStage("grSstWinOpen: transport init start");
 #endif
 
   /* Set up FifoInfo with CPU Type so that init code knows if it needs
@@ -804,6 +826,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   if ( !rv ) goto BAILOUT;
 #ifdef DE10_BACKEND
   fprintf(stderr, "[de10] grSstWinOpen: transport init done\n");
+  de10BootStage("grSstWinOpen: transport init done");
 #endif
 
   gc->nopCMD = FXFALSE;
@@ -852,6 +875,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   GDBG_INFO((gc->myLevel, "  GC Init\n" ));
 #ifdef DE10_BACKEND
   fprintf(stderr, "[de10] grSstWinOpen: GC init start\n");
+  de10BootStage("grSstWinOpen: GC init start");
 #endif
   gc->state.screen_width  = xres;
   gc->state.screen_height = yres;
@@ -906,6 +930,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   GDBG_INFO((gc->myLevel, "  3D State Init\n" ));
 #ifdef DE10_BACKEND
   fprintf(stderr, "[de10] grSstWinOpen: 3D state init start\n");
+  de10BootStage("grSstWinOpen: 3D state init start");
 #endif
   gc->state.fbi_config.fbzMode = 
     SST_ENRECTCLIP | 
@@ -913,47 +938,83 @@ GR_ENTRY(grSstWinOpen, FxBool, (
     SST_DRAWBUFFER_BACK;
 
 #ifdef DE10_BACKEND
+  gc->state.fbi_config.fbzMode = SST_RGBWRMASK | SST_DRAWBUFFER_BACK;
+  de10BootStage("grSstWinOpen: 3D state basic config");
   fprintf(stderr, "[de10] grSstWinOpen: 3D state basic config\n");
-#endif
+  de10BootStage("grSstWinOpen: before minimal fbzMode");
+  GR_SET_EXPECTED_SIZE(sizeof(FxU32));
+  GR_SET(hw->fbzMode, gc->state.fbi_config.fbzMode);
+  GR_CHECK_SIZE();
+  de10BootStage("grSstWinOpen: after minimal fbzMode");
+  fprintf(stderr, "[de10] grSstWinOpen: minimal fbzMode=0x%x\n",
+          gc->state.fbi_config.fbzMode);
+  fflush(stderr);
+  de10BootStage("grSstWinOpen: skip legacy 3D hardware init");
+  fprintf(stderr, "[de10] grSstWinOpen: skip legacy 3D hardware init\n");
+#else
+  de10BootStage("grSstWinOpen: before grHints");
   grHints(GR_HINT_ALLOW_MIPMAP_DITHER, 0);
 #ifdef DE10_BACKEND
+  de10BootStage("grSstWinOpen: after grHints");
   fprintf(stderr, "[de10] grSstWinOpen: after grHints\n");
 #endif
+  de10BootStage("grSstWinOpen: before grSstOrigin");
   grSstOrigin( origin );
 #ifdef DE10_BACKEND
+  de10BootStage("grSstWinOpen: after grSstOrigin");
   fprintf(stderr, "[de10] grSstWinOpen: after grSstOrigin\n");
 #endif
+  de10BootStage("grSstWinOpen: before alpha/chroma/clip setup");
+  de10BootStage("grSstWinOpen: before grAlphaBlendFunction");
   grAlphaBlendFunction( GR_BLEND_ONE , GR_BLEND_ZERO, 
                         GR_BLEND_ONE, GR_BLEND_ZERO );
+  de10BootStage("grSstWinOpen: after grAlphaBlendFunction");
+  de10BootStage("grSstWinOpen: before grAlphaTestFunction");
   grAlphaTestFunction( GR_CMP_ALWAYS );
+  de10BootStage("grSstWinOpen: after grAlphaTestFunction");
+  de10BootStage("grSstWinOpen: before grAlphaTestReferenceValue");
   grAlphaTestReferenceValue( 0 );
+  de10BootStage("grSstWinOpen: after grAlphaTestReferenceValue");
+  de10BootStage("grSstWinOpen: before grChromakeyMode");
   grChromakeyMode( GR_CHROMAKEY_DISABLE );
+  de10BootStage("grSstWinOpen: after grChromakeyMode");
+  de10BootStage("grSstWinOpen: before grConstantColorValue");
   grConstantColorValue( ( FxU32 ) ~0 );
+  de10BootStage("grSstWinOpen: after grConstantColorValue");
+  de10BootStage("grSstWinOpen: before grClipWindow");
   grClipWindow( 0, 0, gc->state.screen_width, 
                 gc->state.screen_height );
+  de10BootStage("grSstWinOpen: after grClipWindow");
 #ifdef DE10_BACKEND
+  de10BootStage("grSstWinOpen: after alpha/chroma/clip setup");
   fprintf(stderr, "[de10] grSstWinOpen: after alpha/chroma/clip setup\n");
 #endif
   _grColorCombineDelta0Mode( FXFALSE );
 #ifdef DE10_BACKEND
+  de10BootStage("grSstWinOpen: after _grColorCombineDelta0Mode");
   fprintf(stderr, "[de10] grSstWinOpen: after _grColorCombineDelta0Mode\n");
 #endif
+  de10BootStage("grSstWinOpen: before grColorCombine");
   grColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER,
                  GR_COMBINE_FACTOR_ONE,
                  GR_COMBINE_LOCAL_ITERATED,
                  GR_COMBINE_OTHER_ITERATED,
                  FXFALSE);
 #ifdef DE10_BACKEND
+  de10BootStage("grSstWinOpen: after grColorCombine");
   fprintf(stderr, "[de10] grSstWinOpen: after grColorCombine\n");
 #endif
+  de10BootStage("grSstWinOpen: before grAlphaCombine");
   grAlphaCombine(GR_COMBINE_FUNCTION_SCALE_OTHER,
                  GR_COMBINE_FACTOR_ONE,
                  GR_COMBINE_LOCAL_NONE,
                  GR_COMBINE_OTHER_CONSTANT,
                  FXFALSE);
 #ifdef DE10_BACKEND
+  de10BootStage("grSstWinOpen: after grAlphaCombine");
   fprintf(stderr, "[de10] grSstWinOpen: after grAlphaCombine\n");
 #endif
+  de10BootStage("grSstWinOpen: before fixed state tail");
   grColorMask( FXTRUE, FXFALSE );
   grCullMode( GR_CULL_DISABLE );
   grDepthBiasLevel( 0 );
@@ -966,6 +1027,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   grFogColorValue( 0x00000000 );
   grGammaCorrectionValue( 1.7f );
   guTexMemReset();
+  de10BootStage("grSstWinOpen: after fixed state tail");
   switch (gc->num_tmu) {
   case 3:
     grTexClampMode( GR_TMU2, GR_TEXTURECLAMP_CLAMP, GR_TEXTURECLAMP_CLAMP );
@@ -1001,9 +1063,16 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   }
   grLfbConstantAlpha( 0xFF );
   grLfbConstantDepth( 0 );
+#endif
 
   gc->open = FXTRUE;
   _GlideRoot.windowsInit = FXTRUE; /* to avoid race with grSstControl() */
+
+#ifdef DE10_BACKEND
+  de10BootStage("grSstWinOpen: core open done");
+  fprintf(stderr, "[de10] grSstWinOpen: core open done\n");
+  fflush(stderr);
+#endif
 
 #ifdef H3D
   if (GR_RESOLUTION_IS_AUTOFLIPPED(resolution)) {
@@ -1011,6 +1080,16 @@ GR_ENTRY(grSstWinOpen, FxBool, (
   } else
 #endif
 
+#ifdef DE10_BACKEND
+  /* The legacy splash/state-restore path calls grGlideSetState(), which
+   * replays the full register set. DE10 currently uses this open path to
+   * bring up board video safely; rendering register writes are handled
+   * separately once the H2F path is robust.
+   */
+  de10BootStage("grSstWinOpen: skip legacy state restore");
+  fprintf(stderr, "[de10] grSstWinOpen: skip legacy state restore\n");
+  fflush(stderr);
+#else
   {
     GrState
       state;
@@ -1049,6 +1128,7 @@ GR_ENTRY(grSstWinOpen, FxBool, (
 
     grGlideSetState(&state);
   }
+#endif
 
   if (rv) {
     _grX11PresenterInit(hWnd, gc->state.screen_width, gc->state.screen_height);
@@ -1094,6 +1174,29 @@ GR_ENTRY( grSstWinClose, void, ( void ) )
 #define FN_NAME "grSstWinClose"
   GR_BEGIN_NOFIFOCHECK("grSstWinClose",80);
   GDBG_INFO_MORE((gc->myLevel,"()\n"));
+
+#ifdef DE10_BACKEND
+  if ( (gc != NULL) && gc->open ) {
+    fprintf(stderr, "[de10] grSstWinClose: start\n");
+    fflush(stderr);
+    de10BootStage("grSstWinClose: start");
+
+    gc->open = FXFALSE;
+    gc->closedP = FXTRUE;
+
+    de10BootStage("grSstWinClose: skip legacy close");
+    fprintf(stderr, "[de10] grSstWinClose: skip legacy close\n");
+    fflush(stderr);
+  }
+
+  _grX11PresenterShutdown();
+  de10BootStage("grSstWinClose: done");
+  fprintf(stderr, "[de10] grSstWinClose: done\n");
+  fflush(stderr);
+
+  GR_END();
+  return;
+#endif
 
   if ( (gc != NULL) && gc->open ) {
 #if (GLIDE_PLATFORM & GLIDE_OS_WIN32)

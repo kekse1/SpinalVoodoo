@@ -47,7 +47,12 @@
 */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#ifdef DE10_BACKEND
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include <3dfx.h>
 
 #include <glidesys.h>
@@ -57,6 +62,22 @@
 #include <fxdll.h>
 #include <glide.h>
 #include "fxglide.h"
+
+#ifdef DE10_BACKEND
+static void de10BootStage(const char *stage) {
+  const char *path = getenv("DE10_INIT_STAGE_FILE");
+  int fd;
+  if (!path || !path[0]) path = "/home/fpga/de10-cross/init.stage";
+  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return;
+  write(fd, stage, strlen(stage));
+  write(fd, "\n", 1);
+  fsync(fd);
+  close(fd);
+}
+#else
+static void de10BootStage(const char *stage) { (void)stage; }
+#endif
 
 
 /*---------------------------------------------------------------------------
@@ -80,6 +101,7 @@ GR_DIENTRY(grSstQueryHardware, FxBool, ( GrHwConfiguration *hwc ))
 {
   FxBool retVal;
 
+  de10BootStage("grSstQueryHardware: enter");
   GDBG_INFO((80, "grSstQueryHardware\n"));
   GDBG_INFO_MORE((80,"(0x%x)\n",hwc));
 
@@ -91,6 +113,7 @@ GR_DIENTRY(grSstQueryHardware, FxBool, ( GrHwConfiguration *hwc ))
           retVal,
           _GlideRoot.hwConfig.num_sst);
   fflush(stderr);
+  de10BootStage("grSstQueryHardware: exit");
 
   return(retVal);
 } /* grSstQueryHardware */
@@ -100,6 +123,7 @@ GR_DIENTRY(grSstQueryHardware, FxBool, ( GrHwConfiguration *hwc ))
 */
 GR_DIENTRY(grSstSelect, void, ( int which ))
 {
+  de10BootStage("grSstSelect: enter");
   fprintf(stderr, "[hostglide] grSstSelect which=%d num_sst=%u\n",
           which,
           _GlideRoot.hwConfig.num_sst);
@@ -127,9 +151,11 @@ GR_DIENTRY(grSstSelect, void, ( int which ))
     _grRebuildDataList();
 
     initDeviceSelect( which );
+    de10BootStage("grSstSelect: after initDeviceSelect");
 
     GR_END();
   }
+  de10BootStage("grSstSelect: exit");
 } /* grSstSelect */
 
 /*---------------------------------------------------------------------------
